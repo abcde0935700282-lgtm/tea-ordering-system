@@ -1,0 +1,3010 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>線上點餐與智能出餐系統</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- Audio notification utility -->
+    <script src="/static/sound.js"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            200: '#bbf7d0',
+                            500: '#10b981',
+                            600: '#059669',
+                            700: '#047857',
+                            800: '#065f46',
+                            900: '#064e3b',
+                        },
+                        amberbrand: {
+                            50: '#fffbeb',
+                            100: '#fef3c7',
+                            500: '#f59e0b',
+                            600: '#d97706',
+                            700: '#b45309',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        [v-cloak] { display: none; }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(12px);
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.05); opacity: 0.4; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+        .animate-pulse-slow {
+            animation: pulse-ring 2.5s infinite ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-stone-100 text-stone-800 antialiased min-h-screen flex flex-col font-sans">
+<div id="app" v-cloak class="flex flex-col flex-1">
+
+    <!-- 頂端全域導覽列 Header -->
+    <header class="sticky top-0 z-40 bg-white/95 backdrop-blur border-b border-stone-200 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex items-center justify-between h-16">
+                <!-- 品牌 Logo 與店名 -->
+                <div class="flex items-center space-x-3 cursor-pointer" @click="currentTab = 'order'">
+                    <div class="w-10 h-10 rounded-xl bg-black border border-stone-800 flex items-center justify-center text-white shadow-sm font-bold text-lg">
+                        🍽️
+                    </div>
+                    <div>
+                        <div class="flex items-center space-x-2">
+                            <span class="font-bold text-lg text-stone-900 tracking-tight">{{ (settings && settings.store_name) || '線上點餐系統' }}</span>
+                            <span class="text-xs bg-stone-100 text-stone-700 border border-stone-200 px-2 py-0.5 rounded-full font-medium">線上點餐</span>
+                        </div>
+                        <p class="text-xs text-stone-500 hidden sm:block">{{ (settings && settings.store_slogan) || '現點現做 ‧ 精緻餐點茶飲' }}</p>
+                    </div>
+                </div>
+
+                <!-- 導覽分頁切換 (依身分權限顯示) -->
+                <nav class="hidden md:flex items-center space-x-1 lg:space-x-2">
+                    <!-- 客人點餐 (所有人可見) -->
+                    <button @click="currentTab = 'order'"
+                            :class="currentTab === 'order' ? 'bg-brand-50 text-brand-700 font-semibold border-brand-200 shadow-sm' : 'text-stone-600 hover:text-stone-900 hover:bg-stone-50 border-transparent'"
+                            class="px-3.5 py-2 rounded-xl text-sm border transition flex items-center space-x-1.5">
+                        <span>🍜</span>
+                        <span>顧客點餐</span>
+                    </button>
+
+                    <!-- 廚房出餐看板 (需登入: 廚房或店長) -->
+                    <button @click="openProtectedTab('kitchen')"
+                            :class="currentTab === 'kitchen' ? 'bg-amberbrand-50 text-amberbrand-700 font-semibold border-amberbrand-200 shadow-sm' : 'text-stone-600 hover:text-stone-900 hover:bg-stone-50 border-transparent'"
+                            class="px-3.5 py-2 rounded-xl text-sm border transition flex items-center space-x-1.5 relative">
+                        <span>👨‍🍳</span>
+                        <span>廚房出餐</span>
+                        <span v-if="kitchenActiveCount > 0" class="ml-1 px-1.5 py-0.2 text-xs bg-amber-500 text-white font-bold rounded-full animate-pulse">
+                            {{ kitchenActiveCount }}
+                        </span>
+                        <span v-if="!currentUser" class="text-stone-400 text-xs">🔒</span>
+                    </button>
+
+                    <!-- 訂單總表與付款核對 (需登入: 廚房或店長) -->
+                    <button @click="openProtectedTab('orders')"
+                            :class="currentTab === 'orders' ? 'bg-blue-50 text-blue-700 font-semibold border-blue-200 shadow-sm' : 'text-stone-600 hover:text-stone-900 hover:bg-stone-50 border-transparent'"
+                            class="px-3.5 py-2 rounded-xl text-sm border transition flex items-center space-x-1.5">
+                        <span>📋</span>
+                        <span>訂單總表與核帳</span>
+                        <span v-if="unpaidOrdersCount > 0" class="ml-1 px-1.5 py-0.2 text-xs bg-rose-500 text-white font-bold rounded-full">
+                            {{ unpaidOrdersCount }}未收
+                        </span>
+                        <span v-if="!currentUser" class="text-stone-400 text-xs">🔒</span>
+                    </button>
+
+                    <!-- 商品菜單管理 (需登入: 僅店長) -->
+                    <button @click="openProtectedTab('products')"
+                            :class="currentTab === 'products' ? 'bg-purple-50 text-purple-700 font-semibold border-purple-200 shadow-sm' : 'text-stone-600 hover:text-stone-900 hover:bg-stone-50 border-transparent'"
+                            class="px-3.5 py-2 rounded-xl text-sm border transition flex items-center space-x-1.5">
+                        <span>🏷️</span>
+                        <span>商品管理</span>
+                        <span v-if="!currentUser || currentUser.role !== 'admin'" class="text-stone-400 text-xs">🔒</span>
+                    </button>
+
+                    <!-- 店家設定 (需登入: 僅店長) -->
+                    <button @click="openProtectedTab('settings')"
+                            :class="currentTab === 'settings' ? 'bg-stone-200 text-stone-900 font-semibold border-stone-300 shadow-sm' : 'text-stone-600 hover:text-stone-900 hover:bg-stone-50 border-transparent'"
+                            class="px-3.5 py-2 rounded-xl text-sm border transition flex items-center space-x-1.5">
+                        <span>⚙️</span>
+                        <span>店家設定</span>
+                    </button>
+                </nav>
+
+                <!-- 右側身分狀態與購物車按鈕 -->
+                <div class="flex items-center space-x-2 sm:space-x-3">
+                    <!-- 追蹤已下訂單按鈕 (客人用) -->
+                    <button @click="showTrackModal = true"
+                            title="查詢我的訂單"
+                            class="p-2 text-stone-600 hover:text-brand-700 hover:bg-brand-50 rounded-xl transition text-sm flex items-center space-x-1 border border-stone-200">
+                        <span>🔍</span>
+                        <span class="hidden sm:inline">查訂單</span>
+                    </button>
+
+                    <!-- 購物車按鈕 (點餐分頁時醒目) -->
+                    <button @click="showCartDrawer = true"
+                            class="relative bg-brand-600 hover:bg-brand-700 text-white px-3.5 py-2 rounded-xl shadow-sm hover:shadow transition flex items-center space-x-2 font-medium text-sm">
+                        <span>🛒</span>
+                        <span class="hidden sm:inline">購物車</span>
+                        <span v-if="cartTotalQty > 0" class="bg-rose-500 text-white text-xs font-bold px-1.5 py-0.5 rounded-full">
+                            {{ cartTotalQty }}
+                        </span>
+                        <span v-if="cartTotalAmount > 0" class="hidden sm:inline border-l border-brand-500 pl-2 text-brand-100 font-semibold">
+                            NT$ {{ cartTotalAmount }}
+                        </span>
+                    </button>
+
+                    <!-- 登入身分管理 -->
+                    <div class="border-l border-stone-200 pl-2 sm:pl-3 flex items-center">
+                        <template v-if="currentUser">
+                            <div class="flex items-center space-x-2 bg-stone-50 border border-stone-200 px-2.5 py-1.5 rounded-xl text-xs">
+                                <span v-if="currentUser.role === 'admin'" class="bg-amber-100 text-amber-800 font-bold px-2 py-0.5 rounded-md">👑 店長</span>
+                                <span v-else-if="currentUser.role === 'kitchen'" class="bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-md">👨‍🍳 廚房</span>
+                                <span class="text-stone-700 font-medium hidden sm:inline">{{ currentUser.name }}</span>
+                                <button @click="logout" class="text-rose-600 hover:text-rose-800 font-semibold ml-1 underline">登出</button>
+                            </div>
+                        </template>
+                        <template v-else>
+                            <button @click="showLoginModal = true" class="text-stone-600 hover:text-stone-900 bg-stone-100 hover:bg-stone-200 text-xs px-3 py-2 rounded-xl font-medium transition flex items-center space-x-1">
+                                <span>🔑</span>
+                                <span>工作人員登入</span>
+                            </button>
+                        </template>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 手機版次級導覽列 -->
+            <div class="flex md:hidden overflow-x-auto py-2 space-x-2 border-t border-stone-100 text-xs scrollbar-none">
+                <button @click="currentTab = 'order'" :class="currentTab === 'order' ? 'bg-brand-600 text-white font-bold' : 'bg-stone-100 text-stone-700'" class="px-3 py-1.5 rounded-lg whitespace-nowrap">🍜 點餐</button>
+                <button @click="openProtectedTab('kitchen')" :class="currentTab === 'kitchen' ? 'bg-amberbrand-600 text-white font-bold' : 'bg-stone-100 text-stone-700'" class="px-3 py-1.5 rounded-lg whitespace-nowrap">👨‍🍳 廚房 ({{ kitchenActiveCount }})</button>
+                <button @click="openProtectedTab('orders')" :class="currentTab === 'orders' ? 'bg-blue-600 text-white font-bold' : 'bg-stone-100 text-stone-700'" class="px-3 py-1.5 rounded-lg whitespace-nowrap">📋 訂單/核帳</button>
+                <button @click="openProtectedTab('products')" :class="currentTab === 'products' ? 'bg-purple-600 text-white font-bold' : 'bg-stone-100 text-stone-700'" class="px-3 py-1.5 rounded-lg whitespace-nowrap">🏷️ 商品</button>
+                <button @click="openProtectedTab('settings')" :class="currentTab === 'settings' ? 'bg-stone-800 text-white font-bold' : 'bg-stone-100 text-stone-700'" class="px-3 py-1.5 rounded-lg whitespace-nowrap">⚙️ 設定</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 主體內容區塊 -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+
+        <!-- ======================= TAB 1: 顧客點餐介面 ======================= -->
+        <section v-if="currentTab === 'order'" class="space-y-6">
+            <!-- 客人點餐頁面橫幅 (白色與金色茶具照片，保留位置與版面，自然填滿不變形) -->
+            <div class="rounded-3xl overflow-hidden shadow-sm border border-stone-200/80 bg-[#FAF7F0]">
+                <img src="/static/images/banner_teaset.png"
+                     alt="白色與金色精選茶具橫幅"
+                     width="1024"
+                     height="534"
+                     class="w-full h-auto block select-none">
+            </div>
+
+            <!-- 分類選擇與搜尋列 (只保留三個分類按鈕：全部品項、精選茶飲、手作甜點) -->
+            <div class="flex flex-col sm:flex-row items-center justify-between gap-4 sticky top-16 z-30 bg-stone-100/90 backdrop-blur py-2">
+                <!-- 分類標籤按鈕 -->
+                <div class="flex items-center space-x-2 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none">
+                    <button @click="selectedCategory = 0"
+                            :class="selectedCategory === 0 ? 'bg-brand-600 text-white shadow-sm font-semibold' : 'bg-white text-stone-700 hover:bg-stone-50 border border-stone-200'"
+                            class="px-4 py-2 rounded-2xl text-sm transition whitespace-nowrap">
+                        🌟 全部品項 ({{ filteredProducts.length }})
+                    </button>
+                    <button v-for="cat in categories" :key="cat.id"
+                            @click="selectedCategory = cat.id"
+                            :class="selectedCategory === cat.id ? 'bg-brand-600 text-white shadow-sm font-semibold' : 'bg-white text-stone-700 hover:bg-stone-50 border border-stone-200'"
+                            class="px-4 py-2 rounded-2xl text-sm transition whitespace-nowrap flex items-center space-x-1.5">
+                        <span v-if="cat.name.includes('紅茶')">🍂</span>
+                        <span v-else-if="cat.name.includes('綠茶')">🍃</span>
+                        <span v-else-if="cat.name.includes('白茶')">🤍</span>
+                        <span v-else-if="cat.name.includes('烏龍')">🍵</span>
+                        <span v-else-if="cat.name.includes('草本')">🌿</span>
+                        <span v-else-if="cat.name.includes('點心')">🥟</span>
+                        <span v-else>🍵</span>
+                        <span>{{ cat.name }}</span>
+                    </button>
+                </div>
+
+                <!-- 關鍵字搜尋 -->
+                <div class="relative w-full sm:w-64">
+                    <input v-model="searchKeyword" type="text" placeholder="搜尋餐點名稱或食材..."
+                           class="w-full bg-white border border-stone-200 rounded-2xl pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 shadow-sm">
+                    <span class="absolute left-3.5 top-2.5 text-stone-400 text-sm">🔍</span>
+                    <button v-if="searchKeyword" @click="searchKeyword = ''" class="absolute right-3 top-2.5 text-stone-400 hover:text-stone-600 text-xs">✕</button>
+                </div>
+            </div>
+
+            <!-- 商品清單卡片 Grid -->
+            <div v-if="products.length === 0" class="text-center py-20 bg-white rounded-3xl border border-stone-200 shadow-sm space-y-4">
+                <div class="text-6xl mb-2">🍽️</div>
+                <h3 class="text-xl sm:text-2xl font-black text-stone-900">目前尚無商品,請至商品管理新增商品</h3>
+                <p class="text-sm text-stone-500 max-w-md mx-auto">本店目前尚未上架任何商品。若您是店家管理者，請登入後前往「商品管理」自行新增專屬商品並上傳商品照片！</p>
+                <div class="pt-2">
+                    <button v-if="!currentUser" @click="showLoginModal = true" class="bg-brand-600 hover:bg-brand-700 text-white font-bold px-6 py-3 rounded-2xl shadow-sm text-sm transition flex items-center space-x-2 mx-auto">
+                        <span>🔑</span>
+                        <span>店家登入並前往商品管理</span>
+                    </button>
+                    <button v-else-if="currentUser.role === 'admin'" @click="openProtectedTab('products')" class="bg-brand-600 hover:bg-brand-700 text-white font-bold px-6 py-3 rounded-2xl shadow-sm text-sm transition flex items-center space-x-2 mx-auto">
+                        <span>➕</span>
+                        <span>前往商品管理新增商品</span>
+                    </button>
+                </div>
+            </div>
+
+            <div v-else-if="filteredProducts.length === 0" class="text-center py-16 bg-white rounded-3xl border border-stone-200 shadow-sm">
+                <div class="text-5xl mb-3">🔍</div>
+                <h3 class="text-lg font-bold text-stone-800">查無相符餐點</h3>
+                <p class="text-sm text-stone-500 mt-1">請嘗試不同關鍵字或切換分類檢視</p>
+            </div>
+
+            <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div v-for="prod in filteredProducts" :key="prod.id"
+                     class="bg-white rounded-3xl overflow-hidden border border-stone-200 shadow-sm hover:shadow-md transition-all duration-200 flex flex-col group">
+                    <!-- 商品圖片 (純黑背景，無裝飾圖案或品牌名稱) -->
+                    <div class="relative h-48 w-full bg-black overflow-hidden flex items-center justify-center">
+                        <img v-if="prod.image_url"
+                             :src="prod.image_url"
+                             :alt="prod.name"
+                             class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">
+                        <div v-else class="w-full h-full bg-black"></div>
+                        <div class="absolute top-3 left-3 flex flex-wrap gap-1.5">
+                            <span class="bg-white/90 backdrop-blur text-stone-800 text-xs font-bold px-2.5 py-1 rounded-xl shadow-sm">
+                                {{ prod.category_name }}
+                            </span>
+                            <span v-if="prod.price <= 60" class="bg-emerald-600 text-white text-xs font-semibold px-2 py-0.5 rounded-xl shadow-sm">
+                                超值
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- 商品內容資訊 -->
+                    <div class="p-5 flex-1 flex flex-col justify-between">
+                        <div>
+                            <div class="flex items-start justify-between gap-2 mb-1.5">
+                                <h3 class="font-bold text-lg text-stone-900 group-hover:text-brand-700 transition">{{ prod.name }}</h3>
+                                <span class="font-extrabold text-brand-700 text-lg whitespace-nowrap">NT$ {{ prod.price }}</span>
+                            </div>
+                            <p class="text-stone-500 text-xs line-clamp-2 leading-relaxed mb-4">{{ prod.description || '精選食材，每日新鮮現做，口味道地美味。' }}</p>
+                        </div>
+
+                        <!-- 底部按鈕 -->
+                        <div class="pt-3 border-t border-stone-100 flex items-center justify-between">
+                            <span class="text-xs text-stone-400">
+                                <span v-if="prod.customization_options && prod.customization_options.length > 0">可客製甜度/冰塊/配菜</span>
+                                <span v-else>原味呈現</span>
+                            </span>
+                            <button @click="openCustomizationModal(prod)"
+                                    class="bg-brand-50 hover:bg-brand-600 text-brand-700 hover:text-white px-3.5 py-2 rounded-xl text-sm font-semibold transition flex items-center space-x-1.5 shadow-sm">
+                                <span>➕</span>
+                                <span>點餐加購</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ======================= TAB 2: 廚房出餐看板 (KDS) ======================= -->
+        <section v-if="currentTab === 'kitchen'" class="space-y-6">
+            <!-- 廚房頂端控制列 -->
+            <div class="bg-white rounded-3xl p-5 border border-stone-200 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                <div class="flex items-center space-x-3">
+                    <div class="w-12 h-12 rounded-2xl bg-amber-500 text-white flex items-center justify-center text-2xl shadow-md">
+                        👨‍🍳
+                    </div>
+                    <div>
+                        <div class="flex items-center space-x-2">
+                            <h2 class="text-xl font-extrabold text-stone-900">廚房即時出餐工作站 (KDS)</h2>
+                            <span class="bg-amber-100 text-amber-800 text-xs px-2.5 py-0.5 rounded-full font-bold">即時排程</span>
+                        </div>
+                        <p class="text-xs text-stone-500 mt-0.5">點擊卡片一鍵推進出餐狀態：製作中 ➔ 完成待取 ➔ 已取餐</p>
+                    </div>
+                </div>
+
+                <!-- 鈴聲控制與手動重整與製作配方總表 -->
+                <div class="flex items-center space-x-2 sm:space-x-3 w-full md:w-auto justify-end flex-wrap gap-y-2">
+                    <button @click="openRecipeDirectory" class="px-3.5 py-2 text-xs bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold shadow-sm transition flex items-center space-x-1">
+                        <span>📖</span>
+                        <span>商品製作配方總表</span>
+                    </button>
+                    <button @click="testSound" class="px-3 py-2 text-xs bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-xl font-medium transition flex items-center space-x-1">
+                        <span>🔔</span>
+                        <span>測試鈴聲</span>
+                    </button>
+                    <button @click="fetchKitchenOrders" class="px-3.5 py-2 text-xs bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-semibold shadow-sm transition flex items-center space-x-1">
+                        <span :class="isRefreshingKitchen ? 'animate-spin' : ''">🔄</span>
+                        <span>立即同步</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 出餐狀態過濾選單 -->
+            <div class="flex items-center space-x-2 border-b border-stone-200 pb-3">
+                <button @click="kitchenFilter = 'active'"
+                        :class="kitchenFilter === 'active' ? 'bg-stone-900 text-white' : 'bg-white text-stone-600 hover:bg-stone-100'"
+                        class="px-4 py-2 rounded-2xl text-sm font-semibold transition shadow-sm">
+                    🔥 進行中訂單 ({{ activeKitchenOrders.length }})
+                </button>
+                <button @click="kitchenFilter = '製作中'"
+                        :class="kitchenFilter === '製作中' ? 'bg-amber-600 text-white' : 'bg-white text-stone-600 hover:bg-stone-100'"
+                        class="px-4 py-2 rounded-2xl text-sm font-semibold transition shadow-sm">
+                    🍳 製作中 ({{ kitchenOrdersByStatus('製作中').length }})
+                </button>
+                <button @click="kitchenFilter = '待取'"
+                        :class="kitchenFilter === '待取' ? 'bg-emerald-600 text-white' : 'bg-white text-stone-600 hover:bg-stone-100'"
+                        class="px-4 py-2 rounded-2xl text-sm font-semibold transition shadow-sm">
+                    🥡 待取餐 ({{ kitchenOrdersByStatus('待取').length }})
+                </button>
+                <button @click="kitchenFilter = '已取'"
+                        :class="kitchenFilter === '已取' ? 'bg-stone-600 text-white' : 'bg-white text-stone-600 hover:bg-stone-100'"
+                        class="px-4 py-2 rounded-2xl text-sm font-semibold transition shadow-sm">
+                    ✅ 歷史已取
+                </button>
+            </div>
+
+            <!-- 廚房出餐卡片 Grid (大字體、高對比) -->
+            <div v-if="filteredKitchenOrders.length === 0" class="text-center py-20 bg-white rounded-3xl border border-stone-200 shadow-sm space-y-3">
+                <div class="text-6xl mb-2">👨‍🍳</div>
+                <h3 class="text-xl sm:text-2xl font-black text-stone-800">目前沒有訂單，等待客人點餐</h3>
+                <p class="text-sm text-stone-500">目前没有订单,等待客人点餐</p>
+            </div>
+
+            <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+                <div v-for="order in filteredKitchenOrders" :key="order.id"
+                     :class="{
+                        'border-amber-400 bg-amber-50/20': order.order_status === '製作中',
+                        'border-emerald-400 bg-emerald-50/20': order.order_status === '待取' || order.order_status === '完成',
+                        'border-stone-200 bg-stone-50 opacity-75': order.order_status === '已取'
+                     }"
+                     class="rounded-3xl border-2 bg-white p-5 shadow-sm flex flex-col justify-between transition hover:shadow-md">
+                    <!-- 卡片標頭：編號、桌號、時間 -->
+                    <div>
+                        <div class="flex items-center justify-between mb-3 border-b border-stone-100 pb-3">
+                            <div class="flex items-center space-x-2">
+                                <span class="text-2xl font-black text-stone-900 tracking-tight">#{{ order.order_no }}</span>
+                                <span v-if="order.dining_type === '內用' && order.table_no" class="bg-blue-100 text-blue-800 text-xs font-bold px-2.5 py-1 rounded-xl">
+                                    內用 {{ order.table_no }}
+                                </span>
+                                <span v-else-if="order.dining_type === '外帶'" class="bg-purple-100 text-purple-800 text-xs font-bold px-2.5 py-1 rounded-xl">
+                                    外帶
+                                </span>
+                            </div>
+                            <!-- 狀態徽章 -->
+                            <span :class="{
+                                'bg-amber-100 text-amber-800 font-bold': order.order_status === '製作中',
+                                'bg-emerald-100 text-emerald-800 font-bold': order.order_status === '待取' || order.order_status === '完成',
+                                'bg-stone-200 text-stone-700': order.order_status === '已取'
+                            }" class="text-xs px-2.5 py-1 rounded-xl">
+                                {{ order.order_status }}
+                            </span>
+                        </div>
+
+                        <!-- 下單時間與等待時間提示 -->
+                        <div class="flex items-center justify-between text-xs text-stone-500 mb-3">
+                            <span>顧客：{{ order.customer_name }}</span>
+                            <span class="font-medium text-stone-600">⏱️ {{ formatTimeAgo(order.created_at) }}</span>
+                        </div>
+
+                        <!-- 訂單備註 (若有則醒目提示) -->
+                        <div v-if="order.notes" class="bg-amber-100/70 border border-amber-300 rounded-xl p-2.5 mb-3 text-xs text-amber-900 font-medium">
+                            <span class="font-bold">⚠️ 客人備註：</span>{{ order.notes }}
+                        </div>
+
+                        <!-- 品項清單 (大字體醒目數量，可點擊查看茶葉調製配方) -->
+                        <div class="space-y-2 mb-4">
+                            <div v-for="item in order.items" :key="item.id"
+                                 class="p-2.5 bg-stone-50 rounded-2xl border border-stone-200/60 flex items-start justify-between">
+                                <div class="pr-2 flex-1">
+                                    <div class="flex items-center space-x-2 flex-wrap gap-y-1">
+                                        <span class="font-bold text-stone-900 text-sm sm:text-base">{{ item.product_name }}</span>
+                                        <button @click="openRecipeViewByItem(item)"
+                                                type="button"
+                                                class="inline-flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-bold border border-amber-300 transition shadow-2xs"
+                                                title="查看此商品茶葉製作配方">
+                                            <span>📋</span>
+                                            <span>製作配方</span>
+                                        </button>
+                                    </div>
+                                    <div v-if="item.selected_options" class="text-xs text-brand-700 font-medium mt-0.5">
+                                        👉 {{ item.selected_options }}
+                                    </div>
+                                </div>
+                                <div class="bg-stone-800 text-white font-extrabold text-base px-2.5 py-0.5 rounded-xl whitespace-nowrap shadow-sm ml-2">
+                                    x {{ item.quantity }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 動作按鈕 -->
+                    <div class="pt-3 border-t border-stone-100">
+                        <button v-if="order.order_status === '製作中'"
+                                @click="stepOrderStatus(order)"
+                                class="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 rounded-2xl shadow-sm transition flex items-center justify-center space-x-1">
+                            <span>✅</span>
+                            <span>完成製作 ➔ 移至待取</span>
+                        </button>
+                        <button v-else-if="order.order_status === '待取' || order.order_status === '完成'"
+                                @click="stepOrderStatus(order)"
+                                class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-2xl shadow-sm transition flex items-center justify-center space-x-1">
+                            <span>🥡</span>
+                            <span>客人已取餐 ➔ 完成訂單</span>
+                        </button>
+                        <div v-else class="text-center text-xs text-stone-400 py-1">
+                            已於 {{ order.updated_at.slice(11, 16) }} 取餐出單完畢
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ======================= TAB 3: 訂單總表與付款核對 ======================= -->
+        <section v-if="currentTab === 'orders'" class="space-y-6">
+            <!-- 營運總覽指標小卡 -->
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div class="bg-white p-5 rounded-3xl border border-stone-200 shadow-sm">
+                    <div class="text-xs font-bold text-stone-500 mb-1">今日訂單金額</div>
+                    <div class="text-2xl font-black text-brand-700">NT$ {{ stats.today_revenue }}</div>
+                    <div class="text-xs text-stone-400 mt-1">實收 NT$ {{ stats.today_paid }}</div>
+                </div>
+                <div class="bg-white p-5 rounded-3xl border border-stone-200 shadow-sm">
+                    <div class="text-xs font-bold text-stone-500 mb-1">今日總訂單</div>
+                    <div class="text-2xl font-black text-stone-800">{{ stats.today_orders }} <span class="text-sm font-normal text-stone-500">筆</span></div>
+                    <div class="text-xs text-stone-400 mt-1">即時更新</div>
+                </div>
+                <div class="bg-white p-5 rounded-3xl border border-stone-200 shadow-sm">
+                    <div class="text-xs font-bold text-stone-500 mb-1">廚房待處理</div>
+                    <div class="text-2xl font-black text-amber-600">{{ stats.pending_kitchen }} <span class="text-sm font-normal text-stone-500">單</span></div>
+                    <div class="text-xs text-stone-400 mt-1">製作中與待取</div>
+                </div>
+                <div class="bg-white p-5 rounded-3xl border border-stone-200 shadow-sm">
+                    <div class="text-xs font-bold text-stone-500 mb-1">待核對款項</div>
+                    <div class="text-2xl font-black text-rose-600">{{ stats.pending_payment }} <span class="text-sm font-normal text-stone-500">筆未收</span></div>
+                    <div class="text-xs text-stone-400 mt-1">現金與轉帳待確認</div>
+                </div>
+            </div>
+
+            <!-- 篩選列 -->
+            <div class="bg-white p-4 rounded-3xl border border-stone-200 shadow-sm space-y-3">
+                <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                    <!-- 搜尋 -->
+                    <div class="relative">
+                        <input v-model="orderFilter.search" @input="fetchOrders" type="text" placeholder="搜尋單號、姓名、電話、桌號..."
+                               class="w-full bg-stone-50 border border-stone-200 rounded-2xl pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        <span class="absolute left-3 top-2.5 text-stone-400 text-sm">🔍</span>
+                    </div>
+
+                    <!-- 出餐狀態過濾 -->
+                    <select v-model="orderFilter.status" @change="fetchOrders"
+                            class="bg-stone-50 border border-stone-200 rounded-2xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        <option value="全部">全部出餐狀態</option>
+                        <option value="製作中">製作中</option>
+                        <option value="完成">完成</option>
+                        <option value="待取">待取</option>
+                        <option value="已取">已取</option>
+                        <option value="已取消">已取消</option>
+                    </select>
+
+                    <!-- 付款狀態過濾 -->
+                    <select v-model="orderFilter.payment_status" @change="fetchOrders"
+                            class="bg-stone-50 border border-stone-200 rounded-2xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        <option value="全部">全部付款狀態</option>
+                        <option value="尚未確認">🔴 尚未確認</option>
+                        <option value="已付款">🟢 已付款</option>
+                    </select>
+
+                    <!-- 付款方式過濾 -->
+                    <select v-model="orderFilter.payment_method" @change="fetchOrders"
+                            class="bg-stone-50 border border-stone-200 rounded-2xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        <option value="全部">全部支付方式</option>
+                        <option value="現金">💵 現金結帳</option>
+                        <option value="轉帳">🏧 銀行轉帳</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 訂單總表明細列表 (支援即時切換狀態與付款核對) -->
+            <div class="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-stone-50 border-b border-stone-200 text-stone-600 text-xs font-semibold uppercase tracking-wider">
+                            <tr>
+                                <th class="p-4">訂單編號 / 時間</th>
+                                <th class="p-4">顧客姓名 / 電話</th>
+                                <th class="p-4">用餐方式</th>
+                                <th class="p-4">點購餐點明細</th>
+                                <th class="p-4 text-right">金額</th>
+                                <th class="p-4">出餐狀態</th>
+                                <th class="p-4">付款核對</th>
+                                <th class="p-4 text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-stone-100">
+                            <tr v-if="orders.length === 0">
+                                <td colspan="8" class="p-8 text-center text-stone-500 font-medium">目前沒有訂單，等待客人點餐</td>
+                            </tr>
+                            <tr v-for="ord in orders" :key="ord.id" class="hover:bg-stone-50/80 transition">
+                                <!-- 單號與時間 -->
+                                <td class="p-4 whitespace-nowrap">
+                                    <div class="font-extrabold text-stone-900 text-base">#{{ ord.order_no }}</div>
+                                    <div class="text-xs text-stone-400 mt-0.5">{{ ord.created_at.replace('T', ' ').slice(5, 16) }}</div>
+                                </td>
+
+                                <!-- 顧客資訊 -->
+                                <td class="p-4 whitespace-nowrap">
+                                    <div class="font-semibold text-stone-800">{{ ord.customer_name }}</div>
+                                    <div class="text-xs text-stone-400">{{ ord.customer_phone || '無電話' }}</div>
+                                </td>
+
+                                <!-- 用餐方式 -->
+                                <td class="p-4 whitespace-nowrap">
+                                    <span v-if="ord.dining_type === '內用' && ord.table_no" class="bg-blue-50 text-blue-700 border border-blue-200 font-bold px-2 py-0.5 rounded-lg text-xs">
+                                        內用 {{ ord.table_no }}
+                                    </span>
+                                    <span v-else-if="ord.dining_type === '外帶'" class="bg-purple-50 text-purple-700 border border-purple-200 font-bold px-2 py-0.5 rounded-lg text-xs">
+                                        外帶取餐
+                                    </span>
+                                    <span v-else class="text-stone-400 text-xs">
+                                        一般訂單
+                                    </span>
+                                </td>
+
+                                <!-- 品項清單 -->
+                                <td class="p-4 min-w-[200px]">
+                                    <div class="space-y-1">
+                                        <div v-for="it in ord.items" :key="it.id" class="text-xs flex items-center justify-between text-stone-700">
+                                            <span>
+                                                <span class="font-medium text-stone-900">{{ it.product_name }}</span>
+                                                <span v-if="it.selected_options" class="text-stone-400 text-[11px] block">{{ it.selected_options }}</span>
+                                            </span>
+                                            <span class="font-bold text-stone-800 whitespace-nowrap ml-2">x {{ it.quantity }}</span>
+                                        </div>
+                                    </div>
+                                    <div v-if="ord.notes" class="mt-1 text-xs text-amber-700 bg-amber-50 p-1 rounded">
+                                        備註: {{ ord.notes }}
+                                    </div>
+                                </td>
+
+                                <!-- 金額 -->
+                                <td class="p-4 text-right whitespace-nowrap font-extrabold text-stone-900 text-base">
+                                    NT$ {{ ord.total_amount }}
+                                </td>
+
+                                <!-- 出餐狀態 (可直接更改) -->
+                                <td class="p-4 whitespace-nowrap">
+                                    <select :value="ord.order_status"
+                                            @change="changeOrderStatus(ord.id, $event.target.value)"
+                                            :class="{
+                                                'bg-amber-50 text-amber-800 border-amber-300': ord.order_status === '製作中',
+                                                'bg-emerald-50 text-emerald-800 border-emerald-300': ord.order_status === '待取' || ord.order_status === '完成',
+                                                'bg-stone-100 text-stone-700 border-stone-300': ord.order_status === '已取',
+                                                'bg-rose-50 text-rose-800 border-rose-300': ord.order_status === '已取消'
+                                            }"
+                                            class="text-xs font-bold rounded-xl border px-2.5 py-1.5 focus:outline-none">
+                                        <option value="製作中">製作中</option>
+                                        <option value="完成">完成</option>
+                                        <option value="待取">待取</option>
+                                        <option value="已取">已取</option>
+                                        <option value="已取消">已取消</option>
+                                    </select>
+                                </td>
+
+                                <!-- 付款核對 (尚未確認 / 已付款，一鍵切換) -->
+                                <td class="p-4 whitespace-nowrap">
+                                    <div class="flex flex-col space-y-1">
+                                        <div class="flex items-center space-x-1.5">
+                                            <span class="text-xs font-semibold">{{ ord.payment_method }}</span>
+                                            <span v-if="ord.payment_status === '已付款'" class="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-0.5 rounded-full flex items-center">
+                                                <span>✓ 已付款</span>
+                                            </span>
+                                            <span v-else class="bg-rose-100 text-rose-800 text-xs font-bold px-2 py-0.5 rounded-full flex items-center animate-pulse">
+                                                <span>⏳ 尚未確認</span>
+                                            </span>
+                                        </div>
+                                        <div v-if="ord.payment_note" class="text-[11px] text-stone-500 font-mono">
+                                            {{ ord.payment_note }}
+                                        </div>
+                                        <!-- 店長一鍵核對收款按鈕 -->
+                                        <div v-if="currentUser && currentUser.role === 'admin'" class="pt-0.5">
+                                            <button v-if="ord.payment_status !== '已付款'"
+                                                    @click="togglePaymentStatus(ord, '已付款')"
+                                                    class="text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-semibold px-2 py-1 rounded-lg transition shadow-sm">
+                                                確認已收款
+                                            </button>
+                                            <button v-else
+                                                    @click="togglePaymentStatus(ord, '尚未確認')"
+                                                    class="text-[11px] text-stone-400 hover:text-stone-600 underline">
+                                                改為尚未確認
+                                            </button>
+                                        </div>
+                                    </div>
+                                </td>
+
+                                <!-- 操作 -->
+                                <td class="p-4 whitespace-nowrap text-center">
+                                    <div class="flex items-center justify-center space-x-2">
+                                        <button @click="viewOrderDetails(ord)" class="p-1.5 text-stone-600 hover:text-stone-900 hover:bg-stone-100 rounded-lg" title="查看明細">
+                                            👁️
+                                        </button>
+                                        <button v-if="currentUser && currentUser.role === 'admin'" @click="deleteOrder(ord.id)" class="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg" title="刪除訂單">
+                                            🗑️
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ======================= TAB 4: 商品菜單管理 (店長專屬) ======================= -->
+        <section v-if="currentTab === 'products'" class="space-y-6">
+            <!-- 標頭與功能按鈕 -->
+            <div class="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 bg-white p-5 sm:p-6 rounded-3xl border border-stone-200 shadow-sm">
+                <div>
+                    <div class="flex items-center space-x-2">
+                        <h2 class="text-xl font-extrabold text-stone-900">菜單與商品管理</h2>
+                        <span class="bg-brand-100 text-brand-800 text-xs px-2.5 py-0.5 rounded-full font-bold">自訂菜單模式</span>
+                    </div>
+                    <p class="text-xs text-stone-500 mt-1">店家可自由新增專屬商品、上傳美食圖片、新增自訂分類、設定客製化加料與即時上下架</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button @click="openAddProductModal" class="bg-brand-600 hover:bg-brand-700 text-white font-bold px-4 py-2.5 rounded-2xl shadow-sm transition flex items-center space-x-1.5 text-sm">
+                        <span>➕</span>
+                        <span>新增商品 (上傳圖片/自訂價格)</span>
+                    </button>
+                    <button @click="showCategoryModal = true" class="bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 font-bold px-3.5 py-2.5 rounded-2xl transition flex items-center space-x-1.5 text-sm">
+                        <span>📂</span>
+                        <span>分類管理</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 若目前無任何商品時的引導卡片 -->
+            <div v-if="adminProducts.length === 0" class="bg-white rounded-3xl p-8 sm:p-12 border-2 border-dashed border-stone-300 text-center space-y-4 shadow-sm">
+                <div class="text-6xl">🏪</div>
+                <h3 class="text-xl sm:text-2xl font-black text-stone-900">目前尚無商品,請至商品管理新增商品</h3>
+                <p class="text-sm text-stone-500 max-w-lg mx-auto leading-relaxed">
+                    店家可自由新增專屬商品、從電腦選擇上傳商品圖片、設定販售價格、選擇分類以及填寫商品介紹（可留白）。
+                </p>
+                <div class="flex flex-wrap items-center justify-center gap-3 pt-2">
+                    <button @click="openAddProductModal" class="bg-brand-600 hover:bg-brand-700 text-white font-bold px-6 py-3 rounded-2xl shadow-md transition text-base flex items-center space-x-2">
+                        <span>➕</span>
+                        <span>新增商品</span>
+                    </button>
+                    <button @click="showCategoryModal = true" class="bg-purple-600 hover:bg-purple-700 text-white font-bold px-5 py-3 rounded-2xl shadow-md transition text-sm flex items-center space-x-2">
+                        <span>📂</span>
+                        <span>設定商品分類</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 商品管理列表 -->
+            <div v-else class="bg-white rounded-3xl border border-stone-200 shadow-sm overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-stone-50 border-b border-stone-200 text-stone-600 text-xs font-semibold uppercase">
+                            <tr>
+                                <th class="p-4">商品縮圖</th>
+                                <th class="p-4">商品名稱 / 分類</th>
+                                <th class="p-4">單價</th>
+                                <th class="p-4">客製選項</th>
+                                <th class="p-4">上下架狀態</th>
+                                <th class="p-4 text-center">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-stone-100">
+                            <tr v-for="prod in adminProducts" :key="prod.id" class="hover:bg-stone-50/80 transition">
+                                <td class="p-4 w-20">
+                                    <div v-if="prod.image_url" class="w-14 h-14 rounded-2xl border border-stone-200 overflow-hidden">
+                                        <img :src="prod.image_url" class="w-full h-full object-cover">
+                                    </div>
+                                    <div v-else class="w-14 h-14 bg-black rounded-2xl border border-stone-800"></div>
+                                </td>
+                                <td class="p-4">
+                                    <div class="font-bold text-stone-900 text-base">{{ prod.name }}</div>
+                                    <div class="text-xs text-stone-500 mt-0.5">
+                                        <span class="bg-stone-100 text-stone-700 px-2 py-0.5 rounded-md font-medium">{{ prod.category_name }}</span>
+                                    </div>
+                                    <div class="text-xs text-stone-400 mt-1 line-clamp-1 max-w-md">{{ prod.description }}</div>
+                                </td>
+                                <td class="p-4 font-extrabold text-stone-900 text-base">
+                                    NT$ {{ prod.price }}
+                                </td>
+                                <td class="p-4">
+                                    <div v-if="prod.customization_options && prod.customization_options.length > 0" class="flex flex-wrap gap-1">
+                                        <span v-for="opt in prod.customization_options" :key="opt.name" class="text-[11px] bg-brand-50 text-brand-700 border border-brand-200 px-2 py-0.5 rounded-lg">
+                                            {{ opt.name }}
+                                        </span>
+                                    </div>
+                                    <span v-else class="text-xs text-stone-400">無客製選項</span>
+                                </td>
+                                <!-- 上下架切換開關 (即時生效) -->
+                                <td class="p-4 whitespace-nowrap">
+                                    <button @click="toggleProductStatus(prod)"
+                                            :class="prod.is_available === 1 ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-stone-100 text-stone-500 border-stone-300'"
+                                            class="border px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center space-x-1.5">
+                                        <span class="w-2 h-2 rounded-full" :class="prod.is_available === 1 ? 'bg-emerald-500' : 'bg-stone-400'"></span>
+                                        <span>{{ prod.is_available === 1 ? '上架中' : '已下架 (暫停供應)' }}</span>
+                                    </button>
+                                </td>
+                                <!-- 編輯、配方與刪除 -->
+                                <td class="p-4 whitespace-nowrap text-center">
+                                    <div class="flex items-center justify-center space-x-1.5">
+                                        <button @click="openRecipeView(prod.id, prod.name)" class="p-2 text-amber-700 hover:bg-amber-50 rounded-xl font-semibold text-xs border border-amber-300" title="查看或設定茶葉調製配方">
+                                            📋 配方圖
+                                        </button>
+                                        <button @click="openEditProductModal(prod)" class="p-2 text-brand-700 hover:bg-brand-50 rounded-xl font-semibold text-xs border border-brand-200" title="編輯">
+                                            ✏️ 編輯
+                                        </button>
+                                        <button @click="deleteProduct(prod.id)" class="p-2 text-rose-600 hover:bg-rose-50 rounded-xl font-semibold text-xs border border-rose-200" title="刪除">
+                                            🗑️ 刪除
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ======================= TAB 5: 店家設定 (店長專屬) ======================= -->
+        <section v-if="currentTab === 'settings'" class="space-y-6 max-w-3xl mx-auto">
+            <div class="bg-white p-6 sm:p-8 rounded-3xl border border-stone-200 shadow-sm space-y-6">
+                <div>
+                    <h2 class="text-xl font-extrabold text-stone-900">門市營運與轉帳設定</h2>
+                    <p class="text-xs text-stone-500 mt-1">設定顧客於結帳時看見的銀行帳號、門市公告與桌號清單</p>
+                </div>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-bold text-stone-700 mb-1">門市店名</label>
+                        <input v-model="settingsForm.store_name" type="text" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-stone-700 mb-1">副標宣傳語</label>
+                        <input v-model="settingsForm.store_slogan" type="text" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-xs font-bold text-stone-700 mb-1">聯絡電話</label>
+                            <input v-model="settingsForm.store_phone" type="text" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-stone-700 mb-1">門市地址</label>
+                            <input v-model="settingsForm.store_address" type="text" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        </div>
+                    </div>
+
+                    <div class="pt-4 border-t border-stone-100">
+                        <h3 class="text-sm font-extrabold text-stone-800 mb-3 flex items-center space-x-1.5">
+                            <span>🏧</span>
+                            <span>銀行轉帳收款資訊（結帳時提供客人匯款）</span>
+                        </h3>
+                        <div class="space-y-3">
+                            <div>
+                                <label class="block text-xs font-bold text-stone-700 mb-1">收款銀行代碼與名稱</label>
+                                <input v-model="settingsForm.bank_name" placeholder="例如：中國信託商業銀行 (822)" type="text" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-xs font-bold text-stone-700 mb-1">銀行帳號</label>
+                                    <input v-model="settingsForm.bank_account" placeholder="例如：123-45678-901" type="text" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-stone-700 mb-1">帳戶戶名</label>
+                                    <input v-model="settingsForm.bank_holder" placeholder="例如：餐廳負責人或公司戶名" type="text" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pt-4 border-t border-stone-100">
+                        <div>
+                            <label class="block text-xs font-bold text-stone-700 mb-1">內用桌號清單（以逗號分隔）</label>
+                            <input v-model="settingsForm.tables" type="text" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-stone-700 mb-1">點餐需知公告</label>
+                        <textarea v-model="settingsForm.order_notice" rows="3" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"></textarea>
+                    </div>
+
+                    <div class="pt-4">
+                        <button @click="saveSettings" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 rounded-2xl shadow-sm transition">
+                            儲存門市設定
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ======================= 購物車浮動導覽條 (客人瀏覽時浮動在底部) ======================= -->
+    <div v-if="currentTab === 'order' && cartTotalQty > 0"
+         class="fixed bottom-6 inset-x-4 max-w-lg mx-auto z-40 bg-stone-900/95 backdrop-blur text-white p-3.5 sm:p-4 rounded-3xl shadow-xl flex items-center justify-between border border-stone-700/50">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 rounded-2xl bg-brand-600 flex items-center justify-center text-lg font-bold">
+                🛒
+            </div>
+            <div>
+                <div class="text-xs text-stone-300">已選購 <span class="font-bold text-white">{{ cartTotalQty }}</span> 項餐點</div>
+                <div class="text-lg font-black text-brand-300">NT$ {{ cartTotalAmount }}</div>
+            </div>
+        </div>
+        <button @click="showCartDrawer = true" class="bg-brand-500 hover:bg-brand-600 text-white px-5 py-2.5 rounded-2xl font-bold text-sm shadow transition">
+            查看購物車 / 結帳 ➔
+        </button>
+    </div>
+
+    <!-- ======================= 彈窗 1: 商品客製選項彈窗 ======================= -->
+    <div v-if="showCustomModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+            <div class="relative h-44 bg-black overflow-hidden flex items-center justify-center">
+                <img v-if="customItem.image_url"
+                     :src="customItem.image_url"
+                     class="w-full h-full object-cover">
+                <div v-else class="w-full h-full bg-black"></div>
+                <button @click="showCustomModal = false" class="absolute top-3 right-3 bg-white/80 hover:bg-white text-stone-700 w-8 h-8 rounded-full flex items-center justify-center font-bold shadow">
+                    ✕
+                </button>
+            </div>
+
+            <div class="p-6 overflow-y-auto space-y-5 flex-1">
+                <div>
+                    <h3 class="text-xl font-extrabold text-stone-900">{{ customItem.name }}</h3>
+                    <p class="text-stone-500 text-xs mt-1">{{ customItem.description }}</p>
+                    <div class="text-lg font-extrabold text-brand-700 mt-2">單價：NT$ {{ customItem.price }}</div>
+                </div>
+
+                <!-- 客製化屬性選項 (如：甜度、冰塊、飯量、辣度) -->
+                <div v-for="opt in customItem.customization_options" :key="opt.name" class="space-y-2">
+                    <label class="block text-xs font-bold text-stone-700">{{ opt.name }}</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button v-for="choice in opt.choices" :key="choice"
+                                @click="selectedOptionsMap[opt.name] = choice"
+                                :class="selectedOptionsMap[opt.name] === choice ? 'bg-brand-600 text-white font-bold border-brand-600' : 'bg-stone-50 text-stone-700 hover:bg-stone-100 border-stone-200'"
+                                class="border py-2 px-3 rounded-xl text-xs transition text-center">
+                            {{ choice }}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 數量調整 -->
+                <div class="flex items-center justify-between pt-2 border-t border-stone-100">
+                    <span class="text-sm font-bold text-stone-700">購買數量</span>
+                    <div class="flex items-center space-x-3 bg-stone-100 p-1 rounded-2xl">
+                        <button @click="customQty > 1 ? customQty-- : null" class="w-8 h-8 rounded-xl bg-white shadow-sm flex items-center justify-center font-bold text-stone-700 hover:bg-stone-50">
+                            -
+                        </button>
+                        <span class="font-extrabold text-stone-900 w-6 text-center">{{ customQty }}</span>
+                        <button @click="customQty++" class="w-8 h-8 rounded-xl bg-white shadow-sm flex items-center justify-center font-bold text-stone-700 hover:bg-stone-50">
+                            +
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-4 bg-stone-50 border-t border-stone-100">
+                <button @click="confirmAddToCart" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 rounded-2xl shadow-sm transition flex items-center justify-center space-x-2">
+                    <span>加入購物車</span>
+                    <span>(NT$ {{ calculateItemTotal }})</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 2: 購物車抽屜 / 結帳 Modal ======================= -->
+    <div v-if="showCartDrawer" class="fixed inset-0 z-50 flex items-center justify-center sm:justify-end bg-stone-900/60 backdrop-blur-sm">
+        <div class="bg-white w-full sm:max-w-md h-full flex flex-col shadow-2xl overflow-hidden animate-slide-left">
+            <!-- 購物車標頭 -->
+            <div class="p-5 border-b border-stone-200 flex items-center justify-between bg-stone-50">
+                <div class="flex items-center space-x-2">
+                    <span class="text-xl">🛒</span>
+                    <h3 class="font-extrabold text-stone-900 text-lg">您的購物清單</h3>
+                    <span class="text-xs bg-brand-100 text-brand-800 font-bold px-2 py-0.5 rounded-full">{{ cartTotalQty }} 件</span>
+                </div>
+                <button @click="showCartDrawer = false" class="text-stone-400 hover:text-stone-700 text-xl font-bold p-1">✕</button>
+            </div>
+
+            <!-- 清單內容 -->
+            <div class="flex-1 overflow-y-auto p-5 space-y-4">
+                <div v-if="cart.length === 0" class="text-center py-24 text-stone-400">
+                    <div class="text-5xl mb-3">🧺</div>
+                    <p class="font-medium">購物車目前是空的</p>
+                    <p class="text-xs mt-1">快挑選美味的茶飲或熱騰騰飯食吧！</p>
+                </div>
+
+                <div v-for="(item, idx) in cart" :key="idx" class="p-3.5 bg-stone-50 rounded-2xl border border-stone-200 flex flex-col space-y-2">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <div class="font-bold text-stone-900 text-sm">{{ item.name }}</div>
+                            <div v-if="item.selected_options" class="text-xs text-brand-700 mt-0.5">
+                                {{ item.selected_options }}
+                            </div>
+                        </div>
+                        <button @click="removeFromCart(idx)" class="text-rose-500 hover:text-rose-700 text-xs p-1">刪除</button>
+                    </div>
+
+                    <div class="flex items-center justify-between pt-2 border-t border-stone-200/60">
+                        <span class="text-xs font-bold text-stone-700">NT$ {{ item.unit_price * item.quantity }}</span>
+                        <div class="flex items-center space-x-2 bg-white px-2 py-1 rounded-xl border border-stone-200">
+                            <button @click="item.quantity > 1 ? item.quantity-- : removeFromCart(idx)" class="text-stone-500 hover:text-stone-800 font-bold px-1">-</button>
+                            <span class="text-xs font-bold px-1.5">{{ item.quantity }}</span>
+                            <button @click="item.quantity++" class="text-stone-500 hover:text-stone-800 font-bold px-1">+</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 結帳表單按鈕 -->
+            <div v-if="cart.length > 0" class="p-5 bg-stone-50 border-t border-stone-200 space-y-3">
+                <div class="flex items-center justify-between text-base">
+                    <span class="font-bold text-stone-700">合計總金額</span>
+                    <span class="font-black text-2xl text-brand-700">NT$ {{ cartTotalAmount }}</span>
+                </div>
+                <button @click="showCheckoutModal = true; showCartDrawer = false"
+                        class="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3.5 rounded-2xl shadow-sm transition flex items-center justify-center space-x-2">
+                    <span>填寫結帳資料 ➔</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 3: 填寫結帳資料 (現金 / 轉帳) ======================= -->
+    <div v-if="showCheckoutModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+            <div class="p-5 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+                <div>
+                    <h3 class="font-extrabold text-stone-900 text-lg">確認訂單與結帳資訊</h3>
+                    <p class="text-xs text-stone-500">合計 {{ cartTotalQty }} 項餐點 ‧ NT$ {{ cartTotalAmount }}</p>
+                </div>
+                <button @click="showCheckoutModal = false" class="text-stone-400 hover:text-stone-700 text-xl font-bold">✕</button>
+            </div>
+
+            <div class="p-6 overflow-y-auto space-y-5 flex-1">
+                <!-- 點餐明細摘要清單 -->
+                <div class="bg-stone-50 rounded-2xl p-4 border border-stone-200 space-y-2">
+                    <div class="flex items-center justify-between text-xs font-bold text-stone-700 border-b border-stone-200 pb-2">
+                        <span>選購餐點明細 ({{ cartTotalQty }}項)</span>
+                        <span class="text-brand-700 font-extrabold">小計 NT$ {{ cartTotalAmount }}</span>
+                    </div>
+                    <div class="max-h-36 overflow-y-auto space-y-1.5 pr-1 divide-y divide-stone-100">
+                        <div v-for="(it, idx) in cart" :key="idx" class="pt-1.5 first:pt-0 flex items-center justify-between text-xs">
+                            <div class="flex-1 pr-2">
+                                <span class="font-medium text-stone-900">{{ it.product_name }}</span>
+                                <span v-if="it.selected_options" class="text-stone-400 text-[11px] block">{{ it.selected_options }}</span>
+                            </div>
+                            <div class="text-right whitespace-nowrap">
+                                <span class="text-stone-500 mr-2">x{{ it.quantity }}</span>
+                                <span class="font-bold text-stone-800">NT$ {{ it.subtotal }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 顧客基本資料 -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-bold text-stone-700 mb-1">取餐人姓名 *</label>
+                        <input v-model="checkoutForm.customer_name" placeholder="例如：王小明" type="text"
+                               class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-stone-700 mb-1">聯絡電話 (方便取餐通知)</label>
+                        <input v-model="checkoutForm.customer_phone" placeholder="例如：0912-345-678" type="tel"
+                               class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                    </div>
+                </div>
+
+                <!-- 付款方式 (現金 / 轉帳) -->
+                <div>
+                    <label class="block text-xs font-bold text-stone-700 mb-2">付款方式 *</label>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button type="button" @click="checkoutForm.payment_method = '現金'"
+                                :class="checkoutForm.payment_method === '現金' ? 'bg-amber-600 text-white font-bold' : 'bg-stone-50 text-stone-700 border border-stone-200'"
+                                class="py-2.5 rounded-2xl text-sm transition text-center flex items-center justify-center space-x-1.5">
+                            <span>💵</span>
+                            <span>現金結帳</span>
+                        </button>
+                        <button type="button" @click="checkoutForm.payment_method = '轉帳'"
+                                :class="checkoutForm.payment_method === '轉帳' ? 'bg-blue-600 text-white font-bold' : 'bg-stone-50 text-stone-700 border border-stone-200'"
+                                class="py-2.5 rounded-2xl text-sm transition text-center flex items-center justify-center space-x-1.5">
+                            <span>🏧</span>
+                            <span>銀行轉帳</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 轉帳專用卡片說明與末五碼輸入 -->
+                <div v-if="checkoutForm.payment_method === '轉帳'" class="bg-blue-50/80 border border-blue-200 rounded-2xl p-4 space-y-3">
+                    <div class="text-xs font-bold text-blue-900 flex items-center justify-between">
+                        <span>門市匯款專用帳戶：</span>
+                        <span class="text-[11px] text-blue-700">請轉帳後填入後五碼</span>
+                    </div>
+                    <div class="bg-white p-3 rounded-xl border border-blue-100 text-xs space-y-1">
+                        <div><span class="text-stone-400">銀行：</span><span class="font-bold text-stone-800">{{ (settings && settings.bank_name) || '' }}</span></div>
+                        <div class="flex items-center justify-between">
+                            <div><span class="text-stone-400">帳號：</span><span class="font-bold font-mono text-stone-900 text-sm">{{ (settings && settings.bank_account) || '' }}</span></div>
+                            <button type="button" @click="copyBankAcc" class="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-semibold hover:bg-blue-200">一鍵複製</button>
+                        </div>
+                        <div><span class="text-stone-400">戶名：</span><span class="font-bold text-stone-800">{{ (settings && settings.bank_holder) || '' }}</span></div>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-blue-900 mb-1">您的轉帳帳號後五碼 *</label>
+                        <input v-model="checkoutForm.payment_note" placeholder="例如：88721 (方便店家核對)" type="text" maxlength="10"
+                               class="w-full bg-white border border-blue-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono">
+                    </div>
+                </div>
+
+                <div v-else class="bg-amber-50 border border-amber-200 rounded-2xl p-3 text-xs text-amber-800">
+                    💡 現金結帳說明：送出訂單後，請於出餐前至櫃檯告知訂單編號完成付款。
+                </div>
+
+                <!-- 備註 -->
+                <div>
+                    <label class="block text-xs font-bold text-stone-700 mb-1">訂單特殊需求備註 (選填)</label>
+                    <input v-model="checkoutForm.notes" placeholder="例如：少糖、溫熱、多附吸管..." type="text"
+                           class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                </div>
+            </div>
+
+            <!-- 確認按鈕 -->
+            <div class="p-5 bg-stone-50 border-t border-stone-200">
+                <button @click="submitOrder" :disabled="isSubmittingOrder"
+                        class="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3.5 rounded-2xl shadow-sm transition flex items-center justify-center space-x-2 disabled:opacity-50">
+                    <span v-if="isSubmittingOrder" class="animate-spin">🔄</span>
+                    <span>確認送出訂單 ➔ (合計 NT$ {{ cartTotalAmount }})</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 4: 下單成功與確認訂單頁面 Modal ======================= -->
+    <div v-if="showSuccessModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-lg w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh] animate-scale-up">
+            <!-- 頂部確認狀態橫幅 -->
+            <div class="bg-black text-white p-5 text-center border-b border-stone-800 relative">
+                <button @click="showSuccessModal = false; currentTab = 'order'" class="absolute top-4 right-4 text-stone-400 hover:text-white text-lg font-bold">✕</button>
+                <div class="w-12 h-12 rounded-2xl bg-white/10 text-emerald-400 mx-auto flex items-center justify-center text-2xl font-bold mb-2 shadow-inner">
+                    ✓
+                </div>
+                <div class="inline-block bg-white/10 text-stone-200 text-xs px-3 py-1 rounded-full font-medium mb-1">
+                    訂單已成功確認
+                </div>
+                <h3 class="text-3xl font-black text-white tracking-tight">#{{ currentOrder.order_no }}</h3>
+                <p class="text-xs text-stone-400 mt-1">請記住您的訂單編號，方便取餐與對帳</p>
+            </div>
+
+            <div class="p-6 overflow-y-auto space-y-4 flex-1">
+                <!-- 出餐進度即時進度條 -->
+                <div class="bg-stone-50 p-4 rounded-2xl border border-stone-200 space-y-3">
+                    <div class="text-xs font-bold text-stone-700 flex items-center justify-between">
+                        <span>即時出餐進度</span>
+                        <span class="text-brand-700 font-extrabold text-sm">{{ currentOrder.order_status }}</span>
+                    </div>
+                    <!-- 狀態步驟 -->
+                    <div class="flex items-center justify-between text-xs font-bold text-stone-400 relative">
+                        <div :class="['製作中', '完成', '待取', '已取'].includes(currentOrder.order_status) ? 'text-brand-700 font-black' : ''">① 製作中</div>
+                        <div class="w-8 h-0.5 bg-stone-200"></div>
+                        <div :class="['完成', '待取', '已取'].includes(currentOrder.order_status) ? 'text-brand-700 font-black' : ''">② 完成待取</div>
+                        <div class="w-8 h-0.5 bg-stone-200"></div>
+                        <div :class="['已取'].includes(currentOrder.order_status) ? 'text-brand-700 font-black' : ''">③ 已取餐</div>
+                    </div>
+                </div>
+
+                <!-- 訂購餐點明細清單 -->
+                <div class="bg-stone-50 p-4 rounded-2xl border border-stone-200 space-y-2.5">
+                    <div class="text-xs font-bold text-stone-700 flex items-center justify-between border-b border-stone-200 pb-2">
+                        <span>確認訂購餐點明細</span>
+                        <span>{{ currentOrder.items ? currentOrder.items.length : 0 }} 項品項</span>
+                    </div>
+                    <div class="space-y-2 max-h-48 overflow-y-auto divide-y divide-stone-100">
+                        <div v-for="it in currentOrder.items" :key="it.id || it.product_id" class="pt-2 first:pt-0 flex justify-between items-start text-xs">
+                            <div class="flex-1 pr-2">
+                                <span class="font-bold text-stone-900">{{ it.product_name }}</span>
+                                <span v-if="it.selected_options" class="text-stone-400 text-[11px] block">{{ it.selected_options }}</span>
+                            </div>
+                            <div class="text-right whitespace-nowrap">
+                                <span class="text-stone-500 mr-2">x{{ it.quantity }}</span>
+                                <span class="font-bold text-stone-900">NT$ {{ it.subtotal }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- 總金額 -->
+                    <div class="pt-2 border-t border-stone-200 flex items-center justify-between text-sm">
+                        <span class="font-bold text-stone-700">合計總金額</span>
+                        <span class="font-black text-xl text-brand-700">NT$ {{ currentOrder.total_amount }}</span>
+                    </div>
+                </div>
+
+                <!-- 顧客與付款對帳資訊 -->
+                <div class="bg-stone-50 p-4 rounded-2xl border border-stone-200 text-xs space-y-2">
+                    <div class="flex justify-between items-center">
+                        <span class="text-stone-500">取餐顧客</span>
+                        <span class="font-bold text-stone-800">{{ currentOrder.customer_name }}</span>
+                    </div>
+                    <div v-if="currentOrder.customer_phone" class="flex justify-between items-center">
+                        <span class="text-stone-500">聯絡電話</span>
+                        <span class="font-bold text-stone-800">{{ currentOrder.customer_phone }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-stone-500">付款方式</span>
+                        <span class="font-bold text-stone-800">{{ currentOrder.payment_method }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-stone-500">付款核對狀態</span>
+                        <span class="font-bold" :class="currentOrder.payment_status === '已付款' ? 'text-emerald-700' : 'text-amber-700'">
+                            {{ currentOrder.payment_status === '已付款' ? '✅ 已確認付款' : '⏳ 尚未確認收款' }}
+                        </span>
+                    </div>
+                    <div v-if="currentOrder.payment_note" class="flex justify-between items-center pt-1 border-t border-stone-200">
+                        <span class="text-stone-500">轉帳核帳資訊</span>
+                        <span class="font-mono font-bold text-stone-700">{{ currentOrder.payment_note }}</span>
+                    </div>
+                    <div v-if="currentOrder.notes" class="pt-1 border-t border-stone-200 text-amber-800">
+                        <span class="font-bold">訂單備註：</span>{{ currentOrder.notes }}
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部動作按鈕 -->
+            <div class="p-4 bg-stone-50 border-t border-stone-200 flex space-x-3">
+                <button @click="showSuccessModal = false; currentTab = 'order'" class="flex-1 bg-stone-900 hover:bg-stone-800 text-white font-bold py-3.5 rounded-2xl text-sm transition shadow-sm">
+                    完成 ‧ 繼續點餐
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 5: 查詢我的訂單 Modal ======================= -->
+    <div v-if="showTrackModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between">
+                <h3 class="font-extrabold text-stone-900 text-lg">查詢訂單進度</h3>
+                <button @click="showTrackModal = false" class="text-stone-400 hover:text-stone-700 font-bold">✕</button>
+            </div>
+
+            <div class="flex space-x-2">
+                <input v-model="trackOrderNo" placeholder="請輸入訂單編號 (例如：A101)" type="text"
+                       class="flex-1 bg-stone-50 border border-stone-200 rounded-2xl px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 uppercase font-mono">
+                <button @click="queryOrder" class="bg-brand-600 hover:bg-brand-700 text-white font-bold px-4 py-2 rounded-2xl text-sm transition">
+                    查詢
+                </button>
+            </div>
+
+            <!-- 查詢結果卡片 -->
+            <div v-if="trackedResult" class="p-4 bg-stone-50 rounded-2xl border border-stone-200 space-y-3">
+                <div class="flex items-center justify-between border-b border-stone-200 pb-2">
+                    <div>
+                        <div class="font-black text-xl text-stone-900">#{{ trackedResult.order_no }}</div>
+                        <div class="text-xs text-stone-500">{{ trackedResult.customer_name }} <span v-if="trackedResult.customer_phone">‧ {{ trackedResult.customer_phone }}</span></div>
+                    </div>
+                    <span class="text-xs font-bold px-2.5 py-1 rounded-xl"
+                          :class="trackedResult.order_status === '待取' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'">
+                        {{ trackedResult.order_status }}
+                    </span>
+                </div>
+                <div class="space-y-1">
+                    <div v-for="it in trackedResult.items" :key="it.id" class="text-xs flex justify-between">
+                        <span>{{ it.product_name }} x {{ it.quantity }}</span>
+                        <span class="font-bold">NT$ {{ it.subtotal }}</span>
+                    </div>
+                </div>
+                <div class="flex items-center justify-between pt-2 border-t border-stone-200 text-xs font-bold">
+                    <span>款項：{{ trackedResult.payment_status }}</span>
+                    <span class="text-base font-extrabold text-brand-700">合計 NT$ {{ trackedResult.total_amount }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 6: 店家/廚房人員登入 Modal ======================= -->
+    <div v-if="showLoginModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-sm w-full p-6 sm:p-8 shadow-2xl space-y-5">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="font-extrabold text-stone-900 text-xl">工作人員登入</h3>
+                    <p class="text-xs text-stone-500 mt-0.5">請輸入店家管理員或廚房帳號</p>
+                </div>
+                <button @click="showLoginModal = false" class="text-stone-400 hover:text-stone-700 font-bold">✕</button>
+            </div>
+
+            <!-- 快速示範填入按鈕 (方便測試與實際操作) -->
+            <div class="bg-stone-50 p-3 rounded-2xl border border-stone-200 space-y-2">
+                <div class="text-[11px] font-bold text-stone-500">快速填入示範帳號：</div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button type="button" @click="fillLogin('admin', 'admin123')" class="bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 text-xs py-1.5 px-2 rounded-xl font-bold transition">
+                        👑 店長 (全權限)
+                    </button>
+                    <button type="button" @click="fillLogin('kitchen', 'kitchen123')" class="bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs py-1.5 px-2 rounded-xl font-bold transition">
+                        👨‍🍳 廚房出餐
+                    </button>
+                </div>
+            </div>
+
+            <form @submit.prevent="handleLogin" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-stone-700 mb-1">帳號</label>
+                    <input v-model="loginForm.username" type="text" required placeholder="admin 或 kitchen"
+                           class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-stone-700 mb-1">密碼</label>
+                    <input v-model="loginForm.password" type="password" required placeholder="請輸入密碼"
+                           class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                </div>
+                <button type="submit" :disabled="isLoggingIn"
+                        class="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 rounded-2xl shadow-sm transition disabled:opacity-50">
+                    <span v-if="isLoggingIn">登入中...</span>
+                    <span v-else>立即登入</span>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 7: 新增 / 編輯商品 Modal (自訂圖片與規格) ======================= -->
+    <div v-if="showProductModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh]">
+            <div class="p-5 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+                <div>
+                    <h3 class="font-extrabold text-stone-900 text-lg">{{ productForm.id ? '編輯餐點品項' : '店家自訂上架新商品' }}</h3>
+                    <p class="text-xs text-stone-500 mt-0.5">自訂餐點名稱、售價、上傳專屬照片與設定客製化規格選項</p>
+                </div>
+                <button @click="showProductModal = false" class="text-stone-400 hover:text-stone-700 text-xl font-bold">✕</button>
+            </div>
+
+            <div class="p-6 overflow-y-auto space-y-5 flex-1">
+                <!-- 1. 基本資訊 -->
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-bold text-stone-700 mb-1">商品名稱 *</label>
+                        <input v-model="productForm.name" placeholder="例如：手作黑糖珍珠鮮奶、厚切酥脆豬排飯" type="text"
+                               class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                    </div>
+
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div>
+                            <div class="flex items-center justify-between mb-1">
+                                <label class="text-xs font-bold text-stone-700">所屬分類 *</label>
+                                <button type="button" @click="showCategoryModal = true" class="text-xs text-brand-600 hover:underline">+ 新增分類</button>
+                            </div>
+                            <select v-model="productForm.category_id" class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                                <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-stone-700 mb-1">販售單價 (NT$) *</label>
+                            <input v-model.number="productForm.price" type="number" min="0" placeholder="例如：65"
+                                   class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-stone-700 mb-1">商品介紹 (可留白)</label>
+                        <textarea v-model="productForm.description" rows="2" placeholder="詳細說明餐點特色、風味、食材等 (選填，可留白)..."
+                                  class="w-full bg-stone-50 border border-stone-200 rounded-2xl px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"></textarea>
+                    </div>
+                </div>
+
+                <!-- 2. 商品圖片上傳專區 (清楚按鈕，支援從電腦選擇照片與即時預覽) -->
+                <div class="pt-3 border-t border-stone-100 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <label class="text-xs font-bold text-stone-800 flex items-center space-x-1">
+                            <span>📷</span>
+                            <span>商品圖片上傳</span>
+                        </label>
+                        <button type="button" @click="showUrlInput = !showUrlInput" class="text-[11px] text-stone-500 hover:text-stone-800 underline">
+                            {{ showUrlInput ? '隱藏網址輸入' : '或輸入外部圖片網址' }}
+                        </button>
+                    </div>
+
+                    <!-- 若已上傳圖片，顯示大預覽圖與更換按鈕 -->
+                    <div v-if="productForm.image_url" class="relative group rounded-2xl overflow-hidden border border-stone-200 bg-stone-50 p-3 flex items-center space-x-4">
+                        <img :src="productForm.image_url" alt="商品圖片預覽" class="w-24 h-24 object-cover rounded-xl border border-stone-200 shadow-sm">
+                        <div class="flex-1 space-y-1.5">
+                            <div class="text-xs font-bold text-emerald-700 flex items-center space-x-1">
+                                <span>✅</span>
+                                <span>圖片已就緒並儲存 (重新整理後仍可正常顯示)</span>
+                            </div>
+                            <div class="text-[11px] text-stone-400 font-mono truncate max-w-xs">{{ productForm.image_url }}</div>
+                            <div class="flex items-center space-x-2 pt-1">
+                                <label class="bg-stone-800 hover:bg-stone-900 text-white text-xs px-3 py-1.5 rounded-xl cursor-pointer font-bold transition inline-flex items-center space-x-1 shadow-sm">
+                                    <span>📁</span>
+                                    <span>從電腦重新選擇圖片</span>
+                                    <input type="file" @change="uploadImageFile" accept="image/*" class="hidden">
+                                </label>
+                                <button type="button" @click="productForm.image_url = ''" class="text-rose-600 hover:text-rose-800 text-xs font-semibold underline ml-2">
+                                    移除圖片
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 未上傳圖片時：清楚的圖片上傳按鈕與拖曳框 -->
+                    <div v-else class="space-y-3">
+                        <div class="flex flex-wrap items-center gap-3">
+                            <label class="bg-brand-600 hover:bg-brand-700 text-white font-bold px-4 py-2.5 rounded-2xl cursor-pointer text-sm shadow-sm transition inline-flex items-center space-x-2">
+                                <span>📁</span>
+                                <span>從電腦選擇圖片</span>
+                                <input type="file" @change="uploadImageFile" accept="image/*" class="hidden">
+                            </label>
+                            <span class="text-xs text-stone-400">支援從電腦選擇相片檔案，上傳後即時預覽並永久保存</span>
+                        </div>
+
+                        <div @dragover.prevent="isDragging = true"
+                             @dragleave.prevent="isDragging = false"
+                             @drop.prevent="handleFileDrop"
+                             :class="isDragging ? 'border-brand-500 bg-brand-50/50' : 'border-stone-300 bg-stone-50 hover:bg-stone-100/70'"
+                             class="border-2 border-dashed rounded-2xl p-6 text-center transition cursor-pointer relative">
+                            <input type="file" @change="uploadImageFile" accept="image/*" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full">
+                            <div class="text-3xl mb-1.5">🖼️</div>
+                            <div class="text-xs font-bold text-stone-700">亦可直接將圖片檔案拖曳至此處上傳</div>
+                            <div class="text-[11px] text-stone-400 mt-0.5">支援 JPG, PNG, WEBP, GIF (自動儲存至專案伺服器)</div>
+                            <div v-if="isUploadingImage" class="mt-2 text-xs font-bold text-brand-600 animate-pulse">
+                                ⏳ 圖片上傳中，請稍候...
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 備用圖片網址輸入 -->
+                    <div v-if="showUrlInput" class="pt-1">
+                        <input v-model="productForm.image_url" placeholder="貼上網路圖片網址 (https://...)" type="text"
+                                class="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-1.5 text-xs focus:outline-none font-mono">
+                    </div>
+                </div>
+
+                <!-- 3. 自訂客製化選項規格與加價 -->
+                <div class="pt-3 border-t border-stone-100 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <label class="text-xs font-bold text-stone-800 flex items-center space-x-1">
+                                <span>⚙️</span>
+                                <span>客製化選項設定 (甜度/冰塊/加料加價/辣度)</span>
+                            </label>
+                            <p class="text-[11px] text-stone-400">可自由新增多組規格，顧客點餐時即可自行挑選</p>
+                        </div>
+                        <button type="button" @click="addOptionGroup" class="bg-brand-50 hover:bg-brand-100 text-brand-700 border border-brand-200 text-xs font-bold px-2.5 py-1.5 rounded-xl transition flex items-center space-x-1">
+                            <span>➕</span>
+                            <span>新增規格</span>
+                        </button>
+                    </div>
+
+                    <!-- 快速範本按鈕 -->
+                    <div class="flex flex-wrap items-center gap-1.5 text-xs text-stone-500">
+                        <span class="text-[11px]">快速範本：</span>
+                        <button type="button" @click="applyCustomTemplate('tea')" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-1 rounded-lg text-xs">
+                            🍵 茶品規格 (冷熱/甜度/冰塊)
+                        </button>
+                        <button type="button" @click="applyCustomTemplate('snack')" class="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 px-2 py-1 rounded-lg text-xs">
+                            🥟 點心規格 (份量/加購/包裝)
+                        </button>
+                        <button type="button" @click="customOptionGroups = []" class="text-stone-400 hover:text-stone-600 underline text-xs ml-1">
+                            清空規格
+                        </button>
+                    </div>
+
+                    <!-- 規格清單編輯器 -->
+                    <div v-if="customOptionGroups.length === 0" class="p-3 bg-stone-50 rounded-xl border border-stone-200 text-center text-xs text-stone-400">
+                        目前未設定客製化規格（顧客點餐時將直接加入購物車出餐）
+                    </div>
+
+                    <div v-else class="space-y-2.5">
+                        <div v-for="(group, gIdx) in customOptionGroups" :key="gIdx" class="bg-stone-50 p-3 rounded-2xl border border-stone-200 space-y-2 relative">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center space-x-2 flex-1 mr-2">
+                                    <span class="text-xs font-bold text-stone-600 whitespace-nowrap">規格名稱：</span>
+                                    <input v-model="group.name" placeholder="例如：甜度、冰塊、加料加購、份量" type="text"
+                                           class="bg-white border border-stone-200 rounded-xl px-2.5 py-1 text-xs font-bold text-stone-900 w-44 focus:outline-none focus:ring-1 focus:ring-brand-500">
+                                </div>
+                                <button type="button" @click="removeOptionGroup(gIdx)" class="text-rose-500 hover:text-rose-700 text-xs p-1" title="刪除此規格群組">
+                                    ✕ 刪除
+                                </button>
+                            </div>
+                            <div>
+                                <label class="block text-[11px] font-medium text-stone-500 mb-1">可選項目（以逗號分隔，若需加價可標註如 +10元）：</label>
+                                <input v-model="group.choicesStr" placeholder="例如：正常糖, 半糖, 微糖, 無糖 或 黑糖珍珠 (+10元), 仙草凍 (+10元)" type="text"
+                                       class="w-full bg-white border border-stone-200 rounded-xl px-2.5 py-1.5 text-xs text-stone-800 focus:outline-none focus:ring-1 focus:ring-brand-500">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部動作按鈕 -->
+            <div class="p-5 bg-stone-50 border-t border-stone-200 flex space-x-3">
+                <button @click="showProductModal = false" class="flex-1 bg-stone-200 hover:bg-stone-300 text-stone-800 font-bold py-3 rounded-2xl text-sm transition">
+                    取消
+                </button>
+                <button @click="saveProduct" class="flex-1 bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 rounded-2xl text-sm transition shadow-sm flex items-center justify-center space-x-1">
+                    <span>✓</span>
+                    <span>儲存並上架商品</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 8: 自訂商品分類管理 Modal ======================= -->
+    <div v-if="showCategoryModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-900/60 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+            <div class="p-5 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+                <div>
+                    <h3 class="font-extrabold text-stone-900 text-lg">商品分類管理</h3>
+                    <p class="text-xs text-stone-500 mt-0.5">自訂店內的菜單類別，方便顧客快速點選</p>
+                </div>
+                <button @click="showCategoryModal = false" class="text-stone-400 hover:text-stone-700 text-xl font-bold">✕</button>
+            </div>
+
+            <div class="p-6 overflow-y-auto space-y-5 flex-1">
+                <!-- 新增分類輸入區 -->
+                <div class="bg-purple-50/70 border border-purple-200 rounded-2xl p-4 space-y-3">
+                    <div class="text-xs font-bold text-purple-900">➕ 新增自訂分類</div>
+                    <div class="flex space-x-2">
+                        <input v-model="newCategoryName" placeholder="例如：手作甜品、特調氣泡飲..." type="text"
+                               class="flex-1 bg-white border border-purple-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500">
+                        <button type="button" @click="saveNewCategory" class="bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold px-3 py-2 rounded-xl transition whitespace-nowrap">
+                            建立分類
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 現有分類列表 -->
+                <div class="space-y-2">
+                    <label class="block text-xs font-bold text-stone-700">目前分類清單</label>
+                    <div v-if="categories.length === 0" class="text-center py-6 text-stone-400 text-xs">
+                        尚無任何分類，請於上方新增
+                    </div>
+                    <div v-for="cat in categories" :key="cat.id" class="flex items-center justify-between p-3 bg-stone-50 rounded-2xl border border-stone-200">
+                        <div class="flex items-center space-x-2">
+                            <span class="w-8 h-8 rounded-xl bg-white border border-stone-200 flex items-center justify-center text-sm font-bold shadow-sm">
+                                📂
+                            </span>
+                            <span class="font-bold text-stone-800 text-sm">{{ cat.name }}</span>
+                        </div>
+                        <button type="button" @click="deleteCategory(cat.id)" class="text-rose-500 hover:text-rose-700 text-xs font-medium px-2 py-1 hover:bg-rose-50 rounded-lg transition" title="刪除分類">
+                            🗑️ 刪除
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="p-4 bg-stone-50 border-t border-stone-200 text-right">
+                <button @click="showCategoryModal = false" class="bg-stone-800 hover:bg-stone-900 text-white font-bold px-5 py-2 rounded-xl text-xs transition">
+                    完成關閉
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 8: 廚房出餐工作站 ─ 茶葉製作配方 檢視彈窗 ======================= -->
+    <div v-if="showRecipeModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-stone-900/70 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-3xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh] animate-scale-up">
+            <!-- 彈窗標頭 -->
+            <div class="p-4 sm:p-5 border-b border-stone-200 bg-stone-50/90 flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="w-11 h-11 rounded-2xl bg-amber-500 text-white flex items-center justify-center text-2xl shadow-sm">
+                        📊
+                    </div>
+                    <div>
+                        <div class="flex items-center space-x-2">
+                            <h3 class="font-extrabold text-stone-900 text-lg sm:text-xl">{{ currentRecipe.product_name }} ‧ 茶葉製作配方</h3>
+                            <span v-if="currentRecipe.has_recipe" class="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2 py-0.5 rounded-full">
+                                已設定配方
+                            </span>
+                            <span v-else class="bg-stone-200 text-stone-600 text-[11px] font-bold px-2 py-0.5 rounded-full">
+                                未設定配方
+                            </span>
+                        </div>
+                        <p class="text-xs text-stone-500 mt-0.5">廚房出餐標準規格：茶葉克數、沖泡比例、使用說明與基底熱水規格</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <button v-if="currentRecipe.has_recipe"
+                            @click="openRecipeEdit(currentRecipe.product_id, currentRecipe.product_name, currentRecipe.recipe)"
+                            class="bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold px-3 py-1.5 rounded-xl text-xs border border-amber-300 transition flex items-center space-x-1">
+                        <span>✏️</span>
+                        <span>修改配方</span>
+                    </button>
+                    <button v-if="currentRecipe.has_recipe"
+                            @click="deleteRecipe(currentRecipe.product_id)"
+                            class="bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold px-3 py-1.5 rounded-xl text-xs border border-rose-200 transition flex items-center space-x-1">
+                        <span>🗑️</span>
+                        <span>刪除配方</span>
+                    </button>
+                    <button @click="showRecipeModal = false" class="text-stone-400 hover:text-stone-700 text-xl font-bold p-1 ml-1">✕</button>
+                </div>
+            </div>
+
+            <!-- 彈窗內容：已設定配方 vs 尚未設定配方 -->
+            <div class="p-5 sm:p-6 overflow-y-auto space-y-5 flex-1">
+                <!-- 若已有配方 -->
+                <div v-if="currentRecipe.has_recipe && currentRecipe.recipe" class="space-y-5">
+                    <!-- 頂部指標橫條：熱水/茶湯量 -->
+                    <div class="bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                        <div class="flex items-center space-x-3">
+                            <span class="text-3xl">🫖</span>
+                            <div>
+                                <div class="text-xs font-bold text-amber-900">基底熱水 / 茶湯量規格</div>
+                                <div class="text-lg font-black text-stone-900">
+                                    {{ currentRecipe.recipe.water_amount || '標準出餐容量 (依杯裝)' }}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-1.5 text-xs font-bold">
+                            <span class="bg-emerald-100 text-emerald-800 px-3 py-1 rounded-xl">🍃 茶葉調製配方</span>
+                        </div>
+                    </div>
+
+                    <!-- 整齊卡片式排版：茶葉量核心製作卡片 -->
+                    <div class="grid grid-cols-1 gap-4">
+                        <div v-for="item in currentRecipe.recipe.items" :key="item.key"
+                             class="rounded-2xl border-2 border-emerald-300 bg-emerald-50/20 p-5 shadow-xs flex flex-col space-y-4 bg-white">
+                            <!-- 卡片標頭：圖片/圖示、名稱、比例標籤 -->
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center space-x-3">
+                                    <div v-if="item.image" class="w-14 h-14 rounded-2xl overflow-hidden border border-emerald-200 shadow-xs">
+                                        <img :src="item.image" :alt="item.name" class="w-full h-full object-cover">
+                                    </div>
+                                    <div v-else class="w-14 h-14 rounded-2xl bg-emerald-100 border border-emerald-200 flex items-center justify-center text-3xl shadow-xs">
+                                        🍃
+                                    </div>
+                                    <div>
+                                        <div class="font-black text-stone-900 text-lg flex items-center space-x-2">
+                                            <span>{{ item.name }}</span>
+                                            <span class="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">Tea Leaves</span>
+                                        </div>
+                                        <div class="text-xs text-stone-500 mt-0.5">出餐核心製作成份</div>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="text-[11px] text-stone-500 font-bold mb-0.5">調製比例</div>
+                                    <span class="text-sm px-3 py-1 rounded-xl font-extrabold bg-stone-900 text-white shadow-2xs">
+                                        {{ item.ratio || '標準' }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- 用量顯示 (大字體醒目) -->
+                            <div class="bg-white rounded-xl p-4 border border-emerald-200 shadow-2xs">
+                                <div class="text-xs font-bold text-stone-500 mb-1">標準茶葉克數 / 用量</div>
+                                <div class="text-2xl sm:text-3xl font-black text-emerald-900 tracking-tight">
+                                    {{ item.amount || '0g / 未設定' }}
+                                </div>
+                            </div>
+
+                            <!-- 簡易說明 -->
+                            <div class="bg-white rounded-xl p-3 border border-stone-200 text-xs text-stone-600 flex items-start space-x-2">
+                                <span class="text-emerald-600 font-bold text-base">💬</span>
+                                <div class="flex-1 leading-relaxed">
+                                    <span class="font-bold text-stone-700">茶葉使用說明：</span>
+                                    <span>{{ item.note || '無特別標註，依標準沖泡流程' }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 廚房出餐 SOP / 沖泡步驟說明 -->
+                    <div v-if="currentRecipe.recipe.instructions" class="bg-stone-50 rounded-2xl p-4 border border-stone-200 space-y-1.5">
+                        <div class="text-xs font-bold text-stone-800 flex items-center space-x-1.5">
+                            <span>📝</span>
+                            <span>出餐調製 SOP 與沖泡步驟說明</span>
+                        </div>
+                        <p class="text-xs sm:text-sm text-stone-700 font-medium leading-relaxed whitespace-pre-line pl-5">
+                            {{ currentRecipe.recipe.instructions }}
+                        </p>
+                    </div>
+                </div>
+
+                <!-- 若此商品尚未設定配方 -->
+                <div v-else class="text-center py-16 px-4 space-y-4 bg-stone-50 rounded-3xl border-2 border-dashed border-stone-200">
+                    <div class="w-16 h-16 mx-auto rounded-3xl bg-amber-100 text-amber-800 flex items-center justify-center text-3xl shadow-sm">
+                        🍵
+                    </div>
+                    <div class="space-y-1.5 max-w-md mx-auto">
+                        <h4 class="text-lg font-black text-stone-900">「{{ currentRecipe.product_name }}」尚未設定茶葉製作配方</h4>
+                        <p class="text-xs text-stone-500 leading-relaxed">
+                            系統遵循指示不自動產生假比例或預設數據。店家與廚房人員可自行設定茶葉克數、沖泡比例、使用說明與基底規格。
+                        </p>
+                    </div>
+                    <button @click="openRecipeEdit(currentRecipe.product_id, currentRecipe.product_name)"
+                            class="bg-brand-600 hover:bg-brand-700 text-white font-bold px-6 py-2.5 rounded-2xl text-sm shadow-sm transition inline-flex items-center space-x-1.5">
+                        <span>➕</span>
+                        <span>立即設定「{{ currentRecipe.product_name }}」製作配方</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 彈窗底部按鈕 -->
+            <div class="p-4 bg-stone-50 border-t border-stone-200 flex items-center justify-between">
+                <button @click="openRecipeDirectory" class="text-xs text-stone-600 hover:text-stone-900 font-bold underline flex items-center space-x-1">
+                    <span>📖</span>
+                    <span>查看所有商品配方總表</span>
+                </button>
+                <button @click="showRecipeModal = false" class="bg-stone-800 hover:bg-stone-900 text-white font-bold px-5 py-2.5 rounded-xl text-xs transition">
+                    關閉
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 9: 設定與編輯商品製作配方 Modal ======================= -->
+    <div v-if="showRecipeEditModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-stone-900/70 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh] animate-scale-up">
+            <!-- 標頭 -->
+            <div class="p-4 sm:p-5 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-2xl bg-brand-600 text-white flex items-center justify-center text-xl shadow-sm">
+                        ✏️
+                    </div>
+                    <div>
+                        <h3 class="font-extrabold text-stone-900 text-lg">設定商品製作配方 ─ {{ recipeForm.product_name }}</h3>
+                        <p class="text-xs text-stone-500 mt-0.5">自行設定茶葉克數、沖泡比例、使用說明與基底熱水規格，不同商品可設定不同配方</p>
+                    </div>
+                </div>
+                <button @click="showRecipeEditModal = false" class="text-stone-400 hover:text-stone-700 text-xl font-bold p-1">✕</button>
+            </div>
+
+            <!-- 表單本體 -->
+            <div class="p-5 sm:p-6 overflow-y-auto space-y-6 flex-1">
+                <!-- 全域規格：熱水/茶湯量 & SOP -->
+                <div class="bg-stone-50 p-4 rounded-2xl border border-stone-200 space-y-3">
+                    <div class="font-extrabold text-stone-800 text-xs flex items-center space-x-1.5">
+                        <span>🫖</span>
+                        <span>全域沖泡基底規格與出餐備註</span>
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs font-bold text-stone-700 mb-1">熱水 / 基底茶湯量</label>
+                            <input v-model="recipeForm.water_amount" placeholder="例如：熱水 350ml、高山烏龍原茶 250ml" type="text"
+                                   class="w-full bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-stone-700 mb-1">調製 SOP 步驟 / 備註說明 (選填)</label>
+                            <input v-model="recipeForm.instructions" placeholder="例如：90度熱水浸泡6分鐘後濾出" type="text"
+                                   class="w-full bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 單一茶葉量卡片設定區塊 (整齊卡片排版) -->
+                <div>
+                    <div class="flex items-center justify-between mb-3">
+                        <label class="text-xs font-extrabold text-stone-800 flex items-center space-x-1.5">
+                            <span>🍃</span>
+                            <span>茶葉調製配方設定</span>
+                        </label>
+                        <span class="text-[11px] text-stone-400">僅保留茶葉量設定，可自行輸入克數、比例、使用說明與上傳圖片</span>
+                    </div>
+
+                    <div class="bg-emerald-50/30 border-2 border-emerald-200 rounded-2xl p-5 space-y-4">
+                        <div class="flex items-center justify-between border-b border-emerald-100 pb-2">
+                            <span class="font-extrabold text-emerald-900 text-sm flex items-center space-x-1.5">
+                                <span>🍃</span>
+                                <span>茶葉量</span>
+                            </span>
+                            <span class="text-[11px] text-emerald-700 font-bold">Tea leaves</span>
+                        </div>
+                        <div class="space-y-3">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block text-xs font-bold text-stone-700 mb-1">用量 (克數/匙數)</label>
+                                    <input v-model="recipeForm.tea_leaves_amount" placeholder="例如：12g 或 原葉茶包1入" type="text"
+                                           class="w-full bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-emerald-500">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-bold text-stone-700 mb-1">比例</label>
+                                    <input v-model="recipeForm.tea_leaves_ratio" placeholder="例如：茶水比 1:30 或 20%" type="text"
+                                           class="w-full bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-emerald-500">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-bold text-stone-700 mb-1">使用說明</label>
+                                <input v-model="recipeForm.tea_leaves_note" placeholder="例如：95度水溫悶泡6分鐘" type="text"
+                                       class="w-full bg-white border border-stone-200 rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-emerald-500">
+                            </div>
+                            <div class="pt-1">
+                                <label class="block text-xs font-bold text-stone-700 mb-1.5">成份圖片 (選填)</label>
+                                <div class="flex items-center space-x-3">
+                                    <label class="cursor-pointer bg-white hover:bg-stone-50 border border-stone-200 text-stone-700 text-xs font-bold px-3 py-1.5 rounded-xl transition inline-flex items-center space-x-1 shadow-2xs">
+                                        <span>📷 選擇圖片</span>
+                                        <input type="file" @change="uploadRecipeComponentImage($event, 'tea_leaves')" accept="image/*" class="hidden">
+                                    </label>
+                                    <button v-if="recipeForm.tea_leaves_image" type="button" @click="recipeForm.tea_leaves_image = ''" class="text-rose-600 text-xs underline">移除圖片</button>
+                                    <div v-if="recipeForm.tea_leaves_image" class="w-10 h-10 rounded-xl overflow-hidden border border-emerald-300 shadow-2xs">
+                                        <img :src="recipeForm.tea_leaves_image" class="w-full h-full object-cover">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 底部動作按鈕 -->
+            <div class="p-4 bg-stone-50 border-t border-stone-200 flex items-center justify-end space-x-3">
+                <button type="button" @click="showRecipeEditModal = false" class="px-5 py-2.5 rounded-2xl text-xs font-bold text-stone-600 hover:bg-stone-200 transition">
+                    取消
+                </button>
+                <button type="button" @click="saveRecipe" class="bg-brand-600 hover:bg-brand-700 text-white font-bold px-6 py-2.5 rounded-2xl text-sm shadow-sm transition flex items-center space-x-1.5">
+                    <span>💾</span>
+                    <span>儲存配方 (立即同步出餐工作站)</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ======================= 彈窗 10: 商品製作配方總表 Directory Modal ======================= -->
+    <div v-if="showRecipeDirectoryModal" class="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5 bg-stone-900/70 backdrop-blur-sm">
+        <div class="bg-white rounded-3xl max-w-4xl w-full overflow-hidden shadow-2xl flex flex-col max-h-[92vh] animate-scale-up">
+            <!-- 標頭 -->
+            <div class="p-4 sm:p-5 border-b border-stone-200 bg-stone-50 flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 rounded-2xl bg-amber-500 text-white flex items-center justify-center text-xl shadow-sm">
+                        📖
+                    </div>
+                    <div>
+                        <h3 class="font-extrabold text-stone-900 text-lg">商品製作配方總表</h3>
+                        <p class="text-xs text-stone-500 mt-0.5">即時檢視與設定所有商品的茶葉克數、沖泡比例、使用說明與基底熱水規格</p>
+                    </div>
+                </div>
+                <button @click="showRecipeDirectoryModal = false" class="text-stone-400 hover:text-stone-700 text-xl font-bold p-1">✕</button>
+            </div>
+
+            <!-- 搜尋列與清單 -->
+            <div class="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1">
+                <div class="flex items-center space-x-3">
+                    <div class="relative flex-1">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-stone-400">🔍</span>
+                        <input v-model="recipeDirectorySearch" placeholder="搜尋商品名稱..." type="text"
+                                class="w-full pl-9 pr-4 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs focus:ring-2 focus:ring-amber-500">
+                    </div>
+                    <span class="text-xs text-stone-500 font-bold whitespace-nowrap">共 {{ filteredRecipeDirectory.length }} 項品項</span>
+                </div>
+
+                <div v-if="filteredRecipeDirectory.length === 0" class="text-center py-16 text-stone-400 text-xs">
+                    查無符合條件的商品
+                </div>
+
+                <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+                    <div v-for="item in filteredRecipeDirectory" :key="item.product_id"
+                         class="bg-white border-2 rounded-2xl p-4 shadow-2xs hover:shadow-sm transition flex flex-col justify-between space-y-3"
+                         :class="item.has_recipe ? 'border-amber-200 bg-amber-50/10' : 'border-stone-200'">
+                        <div class="flex items-start space-x-3">
+                            <div v-if="item.product_image" class="w-12 h-12 rounded-xl overflow-hidden border border-stone-200 shrink-0">
+                                <img :src="item.product_image" class="w-full h-full object-cover">
+                            </div>
+                            <div v-else class="w-12 h-12 rounded-xl bg-black border border-stone-800 shrink-0 flex items-center justify-center text-stone-500 text-xs font-bold">
+                                🥤
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="font-extrabold text-stone-900 text-sm truncate">{{ item.product_name }}</div>
+                                <div class="text-[11px] text-stone-500">{{ item.category_name }} ‧ NT$ {{ item.price }}</div>
+                                <div class="mt-1">
+                                    <span v-if="item.has_recipe" class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                        ✅ 已設定配方
+                                    </span>
+                                    <span v-else class="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold bg-stone-100 text-stone-500 border border-stone-200">
+                                        ⚪ 尚未設定配方
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 動作按鈕 -->
+                        <div class="pt-2 border-t border-stone-100 flex items-center justify-between text-xs font-bold">
+                            <button @click="openRecipeView(item.product_id, item.product_name)"
+                                    class="text-amber-700 hover:text-amber-900 hover:underline flex items-center space-x-1">
+                                <span>👁️</span>
+                                <span>檢視配方</span>
+                            </button>
+                            <div class="flex items-center space-x-2">
+                                <button @click="openRecipeEdit(item.product_id, item.product_name, item.recipe)"
+                                        class="bg-stone-100 hover:bg-stone-200 text-stone-800 px-2.5 py-1 rounded-lg text-xs font-bold transition">
+                                    {{ item.has_recipe ? '修改' : '+ 設定' }}
+                                </button>
+                                <button v-if="item.has_recipe" @click="deleteRecipe(item.product_id)"
+                                        class="text-rose-500 hover:text-rose-700 px-1 py-1 rounded-lg text-xs transition" title="刪除配方">
+                                    🗑️
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 彈窗底部按鈕 -->
+            <div class="p-4 bg-stone-50 border-t border-stone-200 text-right">
+                <button @click="showRecipeDirectoryModal = false" class="bg-stone-800 hover:bg-stone-900 text-white font-bold px-5 py-2.5 rounded-xl text-xs transition">
+                    關閉總表
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全域 Toast 訊息通知 -->
+    <div v-if="toast.show" class="fixed top-20 right-4 z-50 bg-stone-900/95 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center space-x-2 border border-stone-700 animate-slide-in">
+        <span>{{ toast.icon }}</span>
+        <span class="text-sm font-medium">{{ toast.message }}</span>
+    </div>
+
+</div>
+
+<!-- Vue 3 核心邏輯 -->
+<script>
+    const { createApp, ref, computed, onMounted, onUnmounted } = Vue;
+
+    createApp({
+        setup() {
+            // 身分與導覽
+            const currentTab = ref('order');
+            const currentUser = ref(null);
+            const token = ref(localStorage.getItem('restaurant_token') || '');
+
+            // 門市設定 (初始預設值，確保載入期間與初次渲染不白畫面)
+            const settings = ref({
+                store_name: '線上點餐系統',
+                store_slogan: '現點現做 ‧ 精緻餐點茶飲',
+                store_phone: '',
+                store_address: '',
+                bank_name: '中國信託商業銀行 (822)',
+                bank_account: '',
+                bank_holder: '',
+                tables: '1桌,2桌,3桌,5桌,6桌,7桌,8桌,吧檯A,吧檯B',
+                order_notice: '歡迎光臨！餐點現點現做，約需 10-15 分鐘。若選擇轉帳，請於結帳時填寫帳號末五碼方便對帳。'
+            });
+            const settingsForm = ref({ ...settings.value });
+
+            // 菜單與分類
+            const categories = ref([]);
+            const products = ref([]);
+            const adminProducts = ref([]);
+            const selectedCategory = ref(0);
+            const searchKeyword = ref('');
+
+            // 購物車
+            const cart = ref(JSON.parse(localStorage.getItem('restaurant_cart') || '[]'));
+            const showCartDrawer = ref(false);
+
+            // 客製化彈窗
+            const showCustomModal = ref(false);
+            const customItem = ref({});
+            const customQty = ref(1);
+            const selectedOptionsMap = ref({});
+
+            // 結帳彈窗
+            const showCheckoutModal = ref(false);
+            const isSubmittingOrder = ref(false);
+            const checkoutForm = ref({
+                customer_name: '',
+                customer_phone: '',
+                payment_method: '現金',
+                payment_note: '',
+                notes: ''
+            });
+
+            // 訂單完成與追蹤
+            const showSuccessModal = ref(false);
+            const currentOrder = ref({});
+            const showTrackModal = ref(false);
+            const trackOrderNo = ref('');
+            const trackedResult = ref(null);
+
+            // 廚房 KDS
+            const kitchenOrders = ref([]);
+            const kitchenFilter = ref('active');
+            const isRefreshingKitchen = ref(false);
+            let kitchenTimer = null;
+
+            // 訂單總表與核帳
+            const orders = ref([]);
+            const orderFilter = ref({
+                search: '',
+                status: '全部',
+                payment_status: '全部',
+                payment_method: '全部'
+            });
+
+            // 營運數據
+            const stats = ref({
+                today_revenue: 0,
+                today_paid: 0,
+                today_orders: 0,
+                pending_kitchen: 0,
+                pending_payment: 0
+            });
+
+            // 登入
+            const showLoginModal = ref(false);
+            const isLoggingIn = ref(false);
+            const loginForm = ref({ username: '', password: '' });
+
+            // 商品與分類管理
+            const showProductModal = ref(false);
+            const showCategoryModal = ref(false);
+            const newCategoryName = ref('');
+            const showUrlInput = ref(false);
+            const isDragging = ref(false);
+            const customOptionGroups = ref([]);
+            const productForm = ref({
+                id: null,
+                name: '',
+                category_id: 1,
+                price: 100,
+                description: '',
+                image_url: '',
+                is_available: 1,
+                customization_options: '[]'
+            });
+            const isUploadingImage = ref(false);
+
+            // 廚房茶葉製作配方管理狀態
+            const showRecipeModal = ref(false);
+            const showRecipeEditModal = ref(false);
+            const showRecipeDirectoryModal = ref(false);
+            const recipeDirectorySearch = ref('');
+            const allRecipes = ref([]);
+            const currentRecipe = ref({
+                has_recipe: false,
+                product_id: null,
+                product_name: '',
+                product_image: '',
+                recipe: null
+            });
+            const recipeForm = ref({
+                product_id: null,
+                product_name: '',
+                product_image: '',
+                water_amount: '',
+                instructions: '',
+                tea_leaves_amount: '',
+                tea_leaves_ratio: '',
+                tea_leaves_note: '',
+                tea_leaves_image: '',
+                sugar_amount: '',
+                sugar_ratio: '',
+                sugar_note: '',
+                sugar_image: '',
+                milk_amount: '',
+                milk_ratio: '',
+                milk_note: '',
+                milk_image: '',
+                ice_amount: '',
+                ice_ratio: '',
+                ice_note: '',
+                ice_image: '',
+                fructose_amount: '',
+                fructose_ratio: '',
+                fructose_note: '',
+                fructose_image: '',
+                concentrate_amount: '',
+                concentrate_ratio: '',
+                concentrate_note: '',
+                concentrate_image: ''
+            });
+
+            // 配方總表搜尋過濾
+            const filteredRecipeDirectory = computed(() => {
+                if (!recipeDirectorySearch.value.trim()) return allRecipes.value;
+                const kw = recipeDirectorySearch.value.trim().toLowerCase();
+                return allRecipes.value.filter(r => (r.product_name || '').toLowerCase().includes(kw));
+            });
+
+            // Toast 提示
+            const toast = ref({ show: false, message: '', icon: '🔔' });
+            function showToast(msg, icon = '🔔') {
+                toast.value = { show: true, message: msg, icon };
+                setTimeout(() => { toast.value.show = false; }, 3000);
+            }
+
+            // 內用桌號陣列
+            const tableList = computed(() => {
+                if (!settings.value || !settings.value.tables) return ['1桌', '2桌', '3桌', '5桌', '6桌'];
+                return settings.value.tables.split(',').map(s => s.trim()).filter(Boolean);
+            });
+
+            // 購物車計算
+            const cartTotalQty = computed(() => cart.value.reduce((sum, item) => sum + item.quantity, 0));
+            const cartTotalAmount = computed(() => cart.value.reduce((sum, item) => sum + (item.unit_price * item.quantity), 0));
+
+            // 菜單篩選
+            const filteredProducts = computed(() => {
+                return products.value.filter(p => {
+                    const matchCat = selectedCategory.value === 0 || p.category_id === selectedCategory.value;
+                    const matchKw = !searchKeyword.value || p.name.includes(searchKeyword.value) || (p.description && p.description.includes(searchKeyword.value));
+                    return matchCat && matchKw;
+                });
+            });
+
+            // 廚房訂單統計與過濾
+            const activeKitchenOrders = computed(() => kitchenOrders.value.filter(o => ['製作中', '完成', '待取'].includes(o.order_status)));
+            const kitchenActiveCount = computed(() => activeKitchenOrders.value.length);
+            const unpaidOrdersCount = computed(() => orders.value.filter(o => o.payment_status === '尚未確認').length);
+
+            const filteredKitchenOrders = computed(() => {
+                if (kitchenFilter.value === 'active') {
+                    return activeKitchenOrders.value;
+                }
+                if (kitchenFilter.value === '製作中') {
+                    return kitchenOrders.value.filter(o => o.order_status === '製作中');
+                }
+                if (kitchenFilter.value === '待取') {
+                    return kitchenOrders.value.filter(o => o.order_status === '待取' || o.order_status === '完成');
+                }
+                if (kitchenFilter.value === '已取') {
+                    return kitchenOrders.value.filter(o => o.order_status === '已取');
+                }
+                return kitchenOrders.value;
+            });
+
+            function kitchenOrdersByStatus(st) {
+                if (st === '待取') return kitchenOrders.value.filter(o => o.order_status === '待取' || o.order_status === '完成');
+                return kitchenOrders.value.filter(o => o.order_status === st);
+            }
+
+            // 圖片 Fallback
+            function getFallbackImage(prod) {
+                if (!prod) return '/static/images/rice_default.svg';
+                const name = prod.name || '';
+                const cat = prod.category_name || '';
+                if (cat.includes('茶') || name.includes('茶') || name.includes('奶')) return '/static/images/tea_default.svg';
+                if (cat.includes('點') || name.includes('豆腐') || name.includes('雞')) return '/static/images/snack_default.svg';
+                return '/static/images/rice_default.svg';
+            }
+
+            function onImageError(event, prod) {
+                event.target.src = getFallbackImage(prod);
+            }
+
+            // 權限檢查切換
+            function openProtectedTab(tabName) {
+                if (tabName === 'kitchen') {
+                    if (!currentUser.value) {
+                        showLoginModal.value = true;
+                        showToast('請先登入廚房工作人員或店長帳號', '🔒');
+                        return;
+                    }
+                    currentTab.value = 'kitchen';
+                    fetchKitchenOrders();
+                } else if (tabName === 'orders') {
+                    if (!currentUser.value) {
+                        showLoginModal.value = true;
+                        showToast('請先登入後檢視訂單總表與核帳', '🔒');
+                        return;
+                    }
+                    currentTab.value = 'orders';
+                    fetchOrders();
+                    fetchStats();
+                } else if (tabName === 'products') {
+                    if (!currentUser.value || currentUser.value.role !== 'admin') {
+                        showLoginModal.value = true;
+                        showToast('只有店家管理員（店長）可存取商品管理', '⚠️');
+                        return;
+                    }
+                    currentTab.value = 'products';
+                    fetchAdminProducts();
+                } else if (tabName === 'settings') {
+                    if (!currentUser.value || currentUser.value.role !== 'admin') {
+                        showLoginModal.value = true;
+                        showToast('只有店家管理員（店長）可修改門市設定', '⚠️');
+                        return;
+                    }
+                    currentTab.value = 'settings';
+                }
+            }
+
+            // API 標頭 (含 Token)
+            function getAuthHeaders() {
+                const h = { 'Content-Type': 'application/json' };
+                if (token.value) {
+                    h['Authorization'] = `Bearer ${token.value}`;
+                }
+                return h;
+            }
+
+            // 載入資料
+            async function fetchSettings() {
+                try {
+                    const res = await fetch('/api/settings');
+                    if (res.ok) {
+                        const data = await res.json();
+                        settings.value = { ...settings.value, ...data };
+                        settingsForm.value = { ...settings.value };
+                    }
+                } catch (e) {
+                    console.error('Fetch settings error:', e);
+                }
+            }
+
+            async function fetchCategories() {
+                try {
+                    const res = await fetch('/api/categories');
+                    categories.value = await res.json();
+                } catch (e) {
+                    console.error('Fetch categories error:', e);
+                }
+            }
+
+            async function fetchProducts() {
+                try {
+                    const res = await fetch('/api/products');
+                    products.value = await res.json();
+                } catch (e) {
+                    console.error('Fetch products error:', e);
+                }
+            }
+
+            async function fetchAdminProducts() {
+                if (!token.value) return;
+                try {
+                    const res = await fetch('/api/admin/products', { headers: getAuthHeaders() });
+                    if (res.ok) {
+                        adminProducts.value = await res.json();
+                    }
+                } catch (e) {
+                    console.error('Fetch admin products error:', e);
+                }
+            }
+
+            async function fetchOrders() {
+                if (!token.value) return;
+                try {
+                    const p = new URLSearchParams();
+                    if (orderFilter.value.search) p.append('search', orderFilter.value.search);
+                    if (orderFilter.value.status !== '全部') p.append('status', orderFilter.value.status);
+                    if (orderFilter.value.payment_status !== '全部') p.append('payment_status', orderFilter.value.payment_status);
+                    if (orderFilter.value.payment_method !== '全部') p.append('payment_method', orderFilter.value.payment_method);
+
+                    const res = await fetch(`/api/orders?${p.toString()}`, { headers: getAuthHeaders() });
+                    if (res.ok) {
+                        orders.value = await res.json();
+                    }
+                } catch (e) {
+                    console.error('Fetch orders error:', e);
+                }
+            }
+
+            async function fetchKitchenOrders() {
+                if (!token.value) return;
+                isRefreshingKitchen.value = true;
+                try {
+                    const res = await fetch('/api/kitchen/orders', { headers: getAuthHeaders() });
+                    if (res.ok) {
+                        const newOrders = await res.json();
+                        // 檢查是否有新訂單抵達，若有則發出鈴響提示
+                        if (kitchenOrders.value.length > 0 && newOrders.length > kitchenOrders.value.length) {
+                            window.soundNotifier.playDing();
+                            showToast('廚房有新訂單抵達！', '🔔');
+                        }
+                        kitchenOrders.value = newOrders;
+                    }
+                } catch (e) {
+                    console.error('Fetch kitchen orders error:', e);
+                } finally {
+                    isRefreshingKitchen.value = false;
+                }
+            }
+
+            async function fetchStats() {
+                if (!token.value || currentUser.value?.role !== 'admin') return;
+                try {
+                    const res = await fetch('/api/stats', { headers: getAuthHeaders() });
+                    if (res.ok) {
+                        stats.value = await res.json();
+                    }
+                } catch (e) {
+                    console.error('Fetch stats error:', e);
+                }
+            }
+
+            // 客製化點餐彈窗
+            function openCustomizationModal(prod) {
+                customItem.value = prod;
+                customQty.value = 1;
+                selectedOptionsMap.value = {};
+                // 預設選取第一個選項
+                if (prod.customization_options && prod.customization_options.length > 0) {
+                    prod.customization_options.forEach(opt => {
+                        if (opt.choices && opt.choices.length > 0) {
+                            selectedOptionsMap.value[opt.name] = opt.choices[0];
+                        }
+                    });
+                }
+                showCustomModal.value = true;
+            }
+
+            const calculateItemTotal = computed(() => {
+                if (!customItem.value.price) return 0;
+                let extra = 0;
+                Object.values(selectedOptionsMap.value).forEach(val => {
+                    if (val.includes('+10元')) extra += 10;
+                    if (val.includes('+15元')) extra += 15;
+                });
+                return (customItem.value.price + extra) * customQty.value;
+            });
+
+            function confirmAddToCart() {
+                let optionsStr = Object.entries(selectedOptionsMap.value)
+                    .map(([k, v]) => `${k}:${v}`)
+                    .join(' / ');
+
+                let extra = 0;
+                Object.values(selectedOptionsMap.value).forEach(val => {
+                    if (val.includes('+10元')) extra += 10;
+                    if (val.includes('+15元')) extra += 15;
+                });
+
+                cart.value.push({
+                    product_id: customItem.value.id,
+                    name: customItem.value.name,
+                    unit_price: customItem.value.price + extra,
+                    quantity: customQty.value,
+                    selected_options: optionsStr,
+                    image_url: customItem.value.image_url
+                });
+
+                localStorage.setItem('restaurant_cart', JSON.stringify(cart.value));
+                showCustomModal.value = false;
+                showToast(`已將「${customItem.value.name}」加入購物車`, '🛒');
+            }
+
+            function removeFromCart(idx) {
+                cart.value.splice(idx, 1);
+                localStorage.setItem('restaurant_cart', JSON.stringify(cart.value));
+            }
+
+            // 送出訂單
+            async function submitOrder() {
+                if (!checkoutForm.value.customer_name.trim()) {
+                    alert('請輸入取餐人姓名');
+                    return;
+                }
+                if (checkoutForm.value.payment_method === '轉帳' && !checkoutForm.value.payment_note.trim()) {
+                    alert('選擇轉帳請務必輸入帳號後五碼以利核帳');
+                    return;
+                }
+
+                isSubmittingOrder.value = true;
+                try {
+                    const payload = {
+                        customer_name: checkoutForm.value.customer_name.trim(),
+                        customer_phone: checkoutForm.value.customer_phone ? checkoutForm.value.customer_phone.trim() : '',
+                        dining_type: '',
+                        table_no: '',
+                        payment_method: checkoutForm.value.payment_method,
+                        payment_note: checkoutForm.value.payment_method === '轉帳' ? `末五碼: ${checkoutForm.value.payment_note.trim()}` : '',
+                        notes: checkoutForm.value.notes ? checkoutForm.value.notes.trim() : '',
+                        items: cart.value.map(it => ({
+                            product_id: it.product_id,
+                            quantity: it.quantity,
+                            selected_options: it.selected_options
+                        }))
+                    };
+
+                    const res = await fetch('/api/orders', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        currentOrder.value = data.order;
+                        cart.value = [];
+                        localStorage.removeItem('restaurant_cart');
+                        showCheckoutModal.value = false;
+                        showSuccessModal.value = true;
+                        window.soundNotifier.playSuccess();
+                        showToast(`訂單 #${data.order.order_no} 建立成功！`, '🎉');
+                    } else {
+                        alert(data.detail || '下單失敗，請稍後再試');
+                    }
+                } catch (e) {
+                    alert('伺服器連線失敗：' + e.message);
+                } finally {
+                    isSubmittingOrder.value = false;
+                }
+            }
+
+            // 查詢訂單
+            async function queryOrder() {
+                if (!trackOrderNo.value.trim()) return;
+                try {
+                    const res = await fetch(`/api/orders/track/${trackOrderNo.value.trim()}`);
+                    if (res.ok) {
+                        trackedResult.value = await res.json();
+                    } else {
+                        alert('找不到該訂單編號，請確認後重試');
+                    }
+                } catch (e) {
+                    alert('查詢失敗：' + e.message);
+                }
+            }
+
+            // 廚房一鍵變更狀態
+            async function stepOrderStatus(order) {
+                try {
+                    const res = await fetch(`/api/kitchen/orders/${order.id}/step`, {
+                        method: 'POST',
+                        headers: getAuthHeaders()
+                    });
+                    if (res.ok) {
+                        await fetchKitchenOrders();
+                        showToast(`訂單 #${order.order_no} 狀態已推進`, '⚡');
+                    }
+                } catch (e) {
+                    alert('操作失敗：' + e.message);
+                }
+            }
+
+            // 店長變更出餐狀態
+            async function changeOrderStatus(orderId, newStatus) {
+                try {
+                    const res = await fetch(`/api/orders/${orderId}/status`, {
+                        method: 'PATCH',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify({ order_status: newStatus })
+                    });
+                    if (res.ok) {
+                        fetchOrders();
+                        fetchStats();
+                        showToast('出餐狀態已更新', '✓');
+                    }
+                } catch (e) {
+                    alert('更新失敗：' + e.message);
+                }
+            }
+
+            // 付款核對 (尚未確認 ➔ 已付款)
+            async function togglePaymentStatus(ord, targetStatus) {
+                try {
+                    const res = await fetch(`/api/orders/${ord.id}/payment`, {
+                        method: 'PATCH',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify({ payment_status: targetStatus })
+                    });
+                    if (res.ok) {
+                        ord.payment_status = targetStatus;
+                        fetchStats();
+                        showToast(`訂單 #${ord.order_no} 款項已標記為【${targetStatus}】`, '💰');
+                    }
+                } catch (e) {
+                    alert('核帳操作失敗：' + e.message);
+                }
+            }
+
+            // 刪除訂單
+            async function deleteOrder(orderId) {
+                if (!confirm('確定要刪除此筆訂單記錄嗎？此操作無法還原。')) return;
+                try {
+                    const res = await fetch(`/api/orders/${orderId}`, {
+                        method: 'DELETE',
+                        headers: getAuthHeaders()
+                    });
+                    if (res.ok) {
+                        fetchOrders();
+                        fetchStats();
+                        showToast('訂單已刪除', '🗑️');
+                    }
+                } catch (e) {
+                    alert('刪除失敗：' + e.message);
+                }
+            }
+
+            // 檢視明細彈窗
+            function viewOrderDetails(ord) {
+                currentOrder.value = ord;
+                showSuccessModal.value = true;
+            }
+
+            // 商品上下架即時切換
+            async function toggleProductStatus(prod) {
+                try {
+                    const res = await fetch(`/api/admin/products/${prod.id}/toggle`, {
+                        method: 'PATCH',
+                        headers: getAuthHeaders()
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        prod.is_available = data.is_available;
+                        fetchProducts(); // 同步客人菜單
+                        showToast(`「${prod.name}」已${data.is_available === 1 ? '上架' : '下架'}`, '🏷️');
+                    }
+                } catch (e) {
+                    alert('切換失敗：' + e.message);
+                }
+            }
+
+            // 規格編輯器輔助函式
+            function addOptionGroup() {
+                customOptionGroups.value.push({
+                    name: '客製規格',
+                    choicesStr: '正常, 半量, 減量'
+                });
+            }
+
+            function removeOptionGroup(idx) {
+                customOptionGroups.value.splice(idx, 1);
+            }
+
+            // 快速套用規格範本
+            function applyCustomTemplate(type) {
+                if (type === 'tea') {
+                    customOptionGroups.value = [
+                        { name: "沖泡冷熱", choicesStr: "冰淬冷飲, 溫熱壺裝" },
+                        { name: "甜度", choicesStr: "無糖 (原茶推薦), 微糖, 半糖" },
+                        { name: "冰量", choicesStr: "去冰, 微冰, 少冰, 正常冰" },
+                        { name: "加料", choicesStr: "無加料, 黑糖珍珠 (+10元), 手工仙草凍 (+10元)" }
+                    ];
+                } else if (type === 'snack' || type === 'dessert') {
+                    customOptionGroups.value = [
+                        { name: "份量", choicesStr: "單人嚐鮮, 雙人分享" },
+                        { name: "加購", choicesStr: "無加購, 特製抹醬 (+10元), 精選加料 (+15元)" },
+                        { name: "包裝", choicesStr: "內用精裝, 外帶保鮮包裝" }
+                    ];
+                }
+                showToast('已套用客製化規格範本', '🪄');
+            }
+
+            // 商品新增與編輯
+            function openAddProductModal() {
+                productForm.value = {
+                    id: null,
+                    name: '',
+                    category_id: categories.value[0]?.id || 1,
+                    price: 80,
+                    description: '',
+                    image_url: '',
+                    is_available: 1,
+                    customization_options: '[]'
+                };
+                customOptionGroups.value = [];
+                showUrlInput.value = false;
+                showProductModal.value = true;
+            }
+
+            function openEditProductModal(prod) {
+                productForm.value = {
+                    id: prod.id,
+                    name: prod.name,
+                    category_id: prod.category_id,
+                    price: prod.price,
+                    description: prod.description,
+                    image_url: prod.image_url,
+                    is_available: prod.is_available,
+                    customization_options: JSON.stringify(prod.customization_options || [])
+                };
+                // 將現有 JSON 選項轉換為編輯器格式
+                if (prod.customization_options && Array.isArray(prod.customization_options)) {
+                    customOptionGroups.value = prod.customization_options.map(opt => ({
+                        name: opt.name || '規格',
+                        choicesStr: Array.isArray(opt.choices) ? opt.choices.join(', ') : ''
+                    }));
+                } else {
+                    customOptionGroups.value = [];
+                }
+                showUrlInput.value = false;
+                showProductModal.value = true;
+            }
+
+            // 儲存商品
+            async function saveProduct() {
+                if (!productForm.value.name.trim()) {
+                    alert('請輸入商品名稱');
+                    return;
+                }
+                if (!productForm.value.price && productForm.value.price !== 0) {
+                    alert('請輸入正確商品單價');
+                    return;
+                }
+
+                // 將編輯器規格轉換為 JSON 格式儲存
+                const serializedOptions = customOptionGroups.value
+                    .filter(g => g.name.trim() && g.choicesStr.trim())
+                    .map(g => ({
+                        name: g.name.trim(),
+                        choices: g.choicesStr.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+                    }));
+                productForm.value.customization_options = JSON.stringify(serializedOptions);
+
+                const isEdit = !!productForm.value.id;
+                const url = isEdit ? `/api/admin/products/${productForm.value.id}` : '/api/admin/products';
+                const method = isEdit ? 'PUT' : 'POST';
+
+                try {
+                    const res = await fetch(url, {
+                        method: method,
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify(productForm.value)
+                    });
+                    if (res.ok) {
+                        showProductModal.value = false;
+                        await fetchAdminProducts();
+                        await fetchProducts();
+                        showToast(`商品「${productForm.value.name}」已成功儲存上架！`, '✅');
+                    } else {
+                        const err = await res.json();
+                        alert(err.detail || '儲存失敗');
+                    }
+                } catch (e) {
+                    alert('儲存失敗：' + e.message);
+                }
+            }
+
+            async function deleteProduct(id) {
+                if (!confirm('確定要徹底刪除此項商品嗎？')) return;
+                try {
+                    const res = await fetch(`/api/admin/products/${id}`, {
+                        method: 'DELETE',
+                        headers: getAuthHeaders()
+                    });
+                    if (res.ok) {
+                        await fetchAdminProducts();
+                        await fetchProducts();
+                        showToast('商品已刪除', '🗑️');
+                    }
+                } catch (e) {
+                    alert('刪除失敗：' + e.message);
+                }
+            }
+
+            // 上傳圖片處理 (檔案上傳與拖曳上傳)
+            async function uploadImageFile(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                await uploadFileDirectly(file);
+            }
+
+            async function handleFileDrop(e) {
+                isDragging.value = false;
+                const files = e.dataTransfer.files;
+                if (files && files.length > 0) {
+                    await uploadFileDirectly(files[0]);
+                }
+            }
+
+            async function uploadFileDirectly(file) {
+                isUploadingImage.value = true;
+                const fd = new FormData();
+                fd.append('file', file);
+                try {
+                    const res = await fetch('/api/admin/upload-image', {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token.value}` },
+                        body: fd
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        productForm.value.image_url = data.url;
+                        showToast('商品圖片已成功上傳並儲存！', '🖼️');
+                    } else {
+                        alert(data.detail || '圖片上傳失敗');
+                    }
+                } catch (err) {
+                    alert('上傳失敗：' + err.message);
+                } finally {
+                    isUploadingImage.value = false;
+                }
+            }
+
+            // 分類管理方法
+            async function saveNewCategory() {
+                if (!newCategoryName.value.trim()) {
+                    alert('請輸入分類名稱');
+                    return;
+                }
+                try {
+                    const res = await fetch('/api/admin/categories', {
+                        method: 'POST',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify({ name: newCategoryName.value.trim(), icon: 'utensils', sort_order: categories.value.length + 1 })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        newCategoryName.value = '';
+                        await fetchCategories();
+                        showToast('新分類已建立！', '📂');
+                    } else {
+                        alert(data.detail || '建立分類失敗');
+                    }
+                } catch (e) {
+                    alert('連線失敗：' + e.message);
+                }
+            }
+
+            async function deleteCategory(id) {
+                if (!confirm('確定要刪除此分類嗎？（若分類下有商品將無法刪除）')) return;
+                try {
+                    const res = await fetch(`/api/admin/categories/${id}`, {
+                        method: 'DELETE',
+                        headers: getAuthHeaders()
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        await fetchCategories();
+                        showToast('分類已刪除', '🗑️');
+                    } else {
+                        alert(data.detail || '刪除失敗');
+                    }
+                } catch (e) {
+                    alert('刪除失敗：' + e.message);
+                }
+            }
+
+
+            // 門市設定儲存
+            async function saveSettings() {
+                try {
+                    const res = await fetch('/api/settings', {
+                        method: 'PUT',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify({ settings: settingsForm.value })
+                    });
+                    if (res.ok) {
+                        settings.value = { ...settingsForm.value };
+                        showToast('門市設定已儲存更新！', '⚙️');
+                    }
+                } catch (e) {
+                    alert('設定儲存失敗：' + e.message);
+                }
+            }
+
+            // 複製銀行帳號
+            function copyBankAcc() {
+                if (navigator.clipboard && settings.value.bank_account) {
+                    navigator.clipboard.writeText(settings.value.bank_account);
+                    showToast('已複製銀行帳號至剪貼簿', '📋');
+                }
+            }
+
+            // 登入
+            function fillLogin(u, p) {
+                loginForm.value.username = u;
+                loginForm.value.password = p;
+            }
+
+            async function handleLogin() {
+                isLoggingIn.value = true;
+                try {
+                    const res = await fetch('/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(loginForm.value)
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        token.value = data.token;
+                        currentUser.value = data.user;
+                        localStorage.setItem('restaurant_token', data.token);
+                        localStorage.setItem('restaurant_user', JSON.stringify(data.user));
+                        showLoginModal.value = false;
+                        showToast(`歡迎回來，${data.user.name}！`, '👋');
+                        // 依角色跳轉預設分頁
+                        if (data.user.role === 'kitchen') {
+                            currentTab.value = 'kitchen';
+                            fetchKitchenOrders();
+                        } else if (data.user.role === 'admin') {
+                            currentTab.value = 'orders';
+                            fetchOrders();
+                            fetchStats();
+                        }
+                    } else {
+                        alert(data.detail || '登入失敗，請確認帳號密碼');
+                    }
+                } catch (e) {
+                    alert('登入錯誤：' + e.message);
+                } finally {
+                    isLoggingIn.value = false;
+                }
+            }
+
+            function logout() {
+                token.value = '';
+                currentUser.value = null;
+                localStorage.removeItem('restaurant_token');
+                localStorage.removeItem('restaurant_user');
+                currentTab.value = 'order';
+                showToast('已成功登出', '👋');
+            }
+
+            // 測試音效
+            function testSound() {
+                window.soundNotifier.playDing();
+                showToast('正在播放廚房出餐鈴聲', '🔔');
+            }
+
+            // 時間格式化 (計算等待分鐘數)
+            function formatTimeAgo(timeStr) {
+                if (!timeStr) return '';
+                const d = new Date(timeStr.replace(' ', 'T') + 'Z');
+                const now = new Date();
+                const diffMin = Math.max(0, Math.floor((now - d) / 60000));
+                if (diffMin < 1) return '剛剛點單';
+                if (diffMin < 60) return `${diffMin} 分鐘前`;
+                return `${Math.floor(diffMin / 60)} 小時前`;
+            }
+
+            // --- 廚房茶葉製作配方管理方法 ---
+
+            // 讀取配方總表
+            async function fetchRecipeDirectory() {
+                try {
+                    const res = await fetch('/api/recipes');
+                    if (res.ok) {
+                        allRecipes.value = await res.json();
+                    }
+                } catch (e) {
+                    console.error('Fetch recipe directory error:', e);
+                }
+            }
+
+            // 開啟配方總表彈窗
+            async function openRecipeDirectory() {
+                await fetchRecipeDirectory();
+                showRecipeDirectoryModal.value = true;
+            }
+
+            // 開啟茶葉製作配方檢視彈窗 (透過商品ID與名稱)
+            async function openRecipeView(productId, productName = '') {
+                try {
+                    const res = await fetch(`/api/recipes/${productId}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        currentRecipe.value = data;
+                        if (!currentRecipe.value.product_name && productName) {
+                            currentRecipe.value.product_name = productName;
+                        }
+                    } else {
+                        currentRecipe.value = {
+                            has_recipe: false,
+                            product_id: productId,
+                            product_name: productName,
+                            product_image: '',
+                            recipe: null
+                        };
+                    }
+                } catch (e) {
+                    currentRecipe.value = {
+                        has_recipe: false,
+                        product_id: productId,
+                        product_name: productName,
+                        product_image: '',
+                        recipe: null
+                    };
+                }
+                showRecipeModal.value = true;
+            }
+
+            // 從訂單中的品項點擊查看配方
+            async function openRecipeViewByItem(item) {
+                await openRecipeView(item.product_id, item.product_name);
+            }
+
+            // 開啟配方編輯彈窗
+            async function openRecipeEdit(productId, productName = '', existingRecipe = null) {
+                if (!token.value) {
+                    showLoginModal.value = true;
+                    showToast('請先登入店家或廚房人員帳號以設定配方', '🔐');
+                    return;
+                }
+                recipeForm.value = {
+                    product_id: productId,
+                    product_name: productName,
+                    product_image: '',
+                    water_amount: '',
+                    instructions: '',
+                    tea_leaves_amount: '',
+                    tea_leaves_ratio: '',
+                    tea_leaves_note: '',
+                    tea_leaves_image: '',
+                    sugar_amount: '',
+                    sugar_ratio: '',
+                    sugar_note: '',
+                    sugar_image: '',
+                    milk_amount: '',
+                    milk_ratio: '',
+                    milk_note: '',
+                    milk_image: '',
+                    ice_amount: '',
+                    ice_ratio: '',
+                    ice_note: '',
+                    ice_image: '',
+                    fructose_amount: '',
+                    fructose_ratio: '',
+                    fructose_note: '',
+                    fructose_image: '',
+                    concentrate_amount: '',
+                    concentrate_ratio: '',
+                    concentrate_note: '',
+                    concentrate_image: ''
+                };
+
+                let targetRecipe = existingRecipe;
+                if (!targetRecipe) {
+                    try {
+                        const res = await fetch(`/api/recipes/${productId}`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            if (data.has_recipe && data.recipe) {
+                                targetRecipe = data.recipe;
+                            }
+                            if (data.product_name) recipeForm.value.product_name = data.product_name;
+                            if (data.product_image) recipeForm.value.product_image = data.product_image;
+                        }
+                    } catch (e) {}
+                }
+
+                if (targetRecipe) {
+                    recipeForm.value.product_name = targetRecipe.product_name || recipeForm.value.product_name;
+                    recipeForm.value.product_image = targetRecipe.product_image || recipeForm.value.product_image;
+                    recipeForm.value.water_amount = targetRecipe.water_amount || '';
+                    recipeForm.value.instructions = targetRecipe.instructions || '';
+                    recipeForm.value.tea_leaves_amount = targetRecipe.tea_leaves_amount || '';
+                    recipeForm.value.tea_leaves_ratio = targetRecipe.tea_leaves_ratio || '';
+                    recipeForm.value.tea_leaves_note = targetRecipe.tea_leaves_note || '';
+                    recipeForm.value.tea_leaves_image = targetRecipe.tea_leaves_image || '';
+                }
+
+                showRecipeEditModal.value = true;
+            }
+
+            // 儲存配方
+            async function saveRecipe() {
+                if (!token.value) {
+                    showLoginModal.value = true;
+                    showToast('請先登入店家或廚房人員帳號', '🔐');
+                    return;
+                }
+                if (!recipeForm.value.product_id) {
+                    alert('請選擇有效商品');
+                    return;
+                }
+                try {
+                    const res = await fetch(`/api/recipes/${recipeForm.value.product_id}`, {
+                        method: 'PUT',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify(recipeForm.value)
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showRecipeEditModal.value = false;
+                        showToast(`「${recipeForm.value.product_name}」茶葉配方已成功儲存！`, '📋');
+                        await openRecipeView(recipeForm.value.product_id, recipeForm.value.product_name);
+                        if (showRecipeDirectoryModal.value) {
+                            await fetchRecipeDirectory();
+                        }
+                    } else {
+                        alert(data.detail || '儲存配方失敗');
+                    }
+                } catch (e) {
+                    alert('儲存配方失敗：' + e.message);
+                }
+            }
+
+            // 刪除配方
+            async function deleteRecipe(productId) {
+                if (!token.value) {
+                    showLoginModal.value = true;
+                    showToast('請先登入店家或廚房人員帳號', '🔐');
+                    return;
+                }
+                if (!confirm('確定要刪除此商品的茶葉製作配方嗎？此操作將自資料庫清除。')) return;
+                try {
+                    const res = await fetch(`/api/recipes/${productId}`, {
+                        method: 'DELETE',
+                        headers: getAuthHeaders()
+                    });
+                    if (res.ok) {
+                        showToast('已刪除此商品製作配方', '🗑️');
+                        if (currentRecipe.value.product_id === productId) {
+                            currentRecipe.value.has_recipe = false;
+                            currentRecipe.value.recipe = null;
+                        }
+                        if (showRecipeDirectoryModal.value) {
+                            await fetchRecipeDirectory();
+                        }
+                    } else {
+                        const err = await res.json();
+                        alert(err.detail || '刪除失敗');
+                    }
+                } catch (e) {
+                    alert('刪除失敗：' + e.message);
+                }
+            }
+
+            // 上傳配方成份圖片
+            async function uploadRecipeComponentImage(e, key) {
+                const file = e.target.files[0];
+                if (!file) return;
+                const fd = new FormData();
+                fd.append('file', file);
+                try {
+                    const res = await fetch('/api/admin/upload-image', {
+                        method: 'POST',
+                        headers: { 'Authorization': `Bearer ${token.value}` },
+                        body: fd
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        recipeForm.value[key + '_image'] = data.url;
+                        showToast('成份圖片已上傳就緒！', '🖼️');
+                    } else {
+                        alert(data.detail || '圖片上傳失敗');
+                    }
+                } catch (err) {
+                    alert('上傳失敗：' + err.message);
+                }
+            }
+
+            onMounted(async () => {
+                // 檢查是否有儲存的身分
+                const savedUser = localStorage.getItem('restaurant_user');
+                if (savedUser && token.value) {
+                    try {
+                        currentUser.value = JSON.parse(savedUser);
+                    } catch (e) {}
+                }
+
+                await fetchSettings();
+                await fetchCategories();
+                await fetchProducts();
+
+                // 廚房排程輪詢 (每 5 秒更新一次，若有新單即時響鈴)
+                kitchenTimer = setInterval(() => {
+                    if (currentTab.value === 'kitchen' && token.value) {
+                        fetchKitchenOrders();
+                    }
+                    if (currentTab.value === 'orders' && token.value) {
+                        fetchOrders();
+                        fetchStats();
+                    }
+                }, 5000);
+            });
+
+            onUnmounted(() => {
+                if (kitchenTimer) clearInterval(kitchenTimer);
+            });
+
+            return {
+                currentTab, currentUser, token, settings, settingsForm, categories, products, adminProducts,
+                selectedCategory, searchKeyword, cart, showCartDrawer, showCustomModal, customItem, customQty,
+                selectedOptionsMap, calculateItemTotal, showCheckoutModal, checkoutForm, isSubmittingOrder,
+                showSuccessModal, currentOrder, showTrackModal, trackOrderNo, trackedResult, kitchenOrders,
+                kitchenFilter, isRefreshingKitchen, kitchenActiveCount, activeKitchenOrders, unpaidOrdersCount,
+                filteredKitchenOrders, kitchenOrdersByStatus, orders, orderFilter, stats, showLoginModal,
+                isLoggingIn, loginForm, showProductModal, productForm, isUploadingImage, toast, tableList,
+                cartTotalQty, cartTotalAmount, filteredProducts,
+                showCategoryModal, newCategoryName, showUrlInput, isDragging, customOptionGroups,
+                addOptionGroup, removeOptionGroup, handleFileDrop, saveNewCategory, deleteCategory,
+                getFallbackImage, onImageError, openProtectedTab, openCustomizationModal, confirmAddToCart,
+                removeFromCart, submitOrder, queryOrder, stepOrderStatus, changeOrderStatus, togglePaymentStatus,
+                deleteOrder, viewOrderDetails, toggleProductStatus, openAddProductModal, openEditProductModal,
+                saveProduct, deleteProduct, uploadImageFile, applyCustomTemplate, saveSettings, copyBankAcc,
+                fillLogin, handleLogin, logout, testSound, formatTimeAgo, fetchKitchenOrders, fetchOrders,
+                showRecipeModal, showRecipeEditModal, showRecipeDirectoryModal, recipeDirectorySearch,
+                allRecipes, currentRecipe, recipeForm, filteredRecipeDirectory,
+                fetchRecipeDirectory, openRecipeDirectory, openRecipeView, openRecipeViewByItem,
+                openRecipeEdit, saveRecipe, deleteRecipe, uploadRecipeComponentImage
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
